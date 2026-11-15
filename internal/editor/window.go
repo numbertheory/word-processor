@@ -21,7 +21,10 @@ type MainWindow struct {
 	statsLabel  *qt6.QLabel
 	cursorLabel *qt6.QLabel
 
-	currentPath string
+	currentPath  string
+	margins      PageMargins
+	settings     AppSettings
+	settingsPath string
 }
 
 // NewMainWindow constructs and wires the rich-text editor window.
@@ -35,15 +38,28 @@ func NewMainWindow() *MainWindow {
 	editor.SetFont(defaultFont)
 	win.SetCentralWidget(editor.QWidget)
 
+	settingsPath, _ := DefaultSettingsPath()
+	settings := DefaultAppSettings()
+	if settingsPath != "" {
+		if loaded, err := LoadSettings(settingsPath); err == nil {
+			settings = loaded
+		}
+	}
+
 	mw := &MainWindow{
-		win:    win,
-		editor: editor,
-		format: newFormatControls(win, editor),
+		win:          win,
+		editor:       editor,
+		format:       newFormatControls(win, editor),
+		margins:      DefaultPageMargins(),
+		settings:     settings,
+		settingsPath: settingsPath,
 	}
 
 	mw.setupToolbars()
 	mw.setupStatusBar()
 	mw.connectSignals()
+	mw.applyEditorTheme()
+	mw.applyMargins()
 	mw.updateWindowTitle()
 	mw.updateStatusBar()
 
@@ -175,8 +191,26 @@ func (mw *MainWindow) setupToolbars() {
 	selectAllAct.OnTriggered(mw.editor.SelectAll)
 	mw.win.AddAction(selectAllAct)
 
-	// Help / About
+	// Page Setup, Application Settings, and Help
 	mainTB.AddSeparator()
+
+	pageSetupAct := qt6.NewQAction6(
+		loadActionIcon(mw.win.QWidget, "▤", "document-properties", "configure"),
+		"Page Setup",
+		mw.win.QObject,
+	)
+	pageSetupAct.SetToolTip("Page Setup (Margins)")
+	pageSetupAct.OnTriggered(mw.openPageSetup)
+	mainTB.AddAction(pageSetupAct)
+
+	settingsAct := qt6.NewQAction6(
+		loadActionIcon(mw.win.QWidget, "⚙", "configure", "preferences-other", "preferences-system"),
+		"Settings",
+		mw.win.QObject,
+	)
+	settingsAct.SetToolTip("Application Settings")
+	settingsAct.OnTriggered(mw.openSettings)
+	mainTB.AddAction(settingsAct)
 
 	helpAct := qt6.NewQAction6(
 		loadActionIcon(mw.win.QWidget, "?", "help-about", "help-contents", "dialog-information"),
@@ -219,6 +253,11 @@ func (mw *MainWindow) connectSignals() {
 	})
 	mw.editor.Document().OnModificationChanged(func(changed bool) {
 		mw.updateWindowTitle()
+	})
+
+	mw.editor.OnPaintEvent(func(super func(e *qt6.QPaintEvent), e *qt6.QPaintEvent) {
+		super(e)
+		mw.paintMarginGuides()
 	})
 
 	mw.win.OnCloseEvent(func(super func(event *qt6.QCloseEvent), event *qt6.QCloseEvent) {
@@ -269,11 +308,88 @@ func (mw *MainWindow) maybeSave() bool {
 	}
 }
 
+func (mw *MainWindow) openPageSetup() {
+	updated, ok := showPageSetupDialog(mw.win.QWidget, mw.margins)
+	if !ok {
+		return
+	}
+	if updated != mw.margins {
+		mw.margins = updated
+		mw.applyMargins()
+		mw.editor.Document().SetModifiedWithBool(true)
+	}
+}
+
+func (mw *MainWindow) openSettings() {
+	updated, ok := showSettingsDialog(mw.win.QWidget, mw.settings)
+	if !ok {
+		return
+	}
+	mw.settings = updated
+	mw.applyEditorTheme()
+	if mw.settingsPath != "" {
+		if err := SaveSettings(mw.settingsPath, mw.settings); err != nil {
+			qt6.QMessageBox_Warning(mw.win.QWidget, "Settings Error", fmt.Sprintf("Could not save settings:\n%v", err))
+		}
+	}
+}
+
+func (mw *MainWindow) applyMargins() {
+	root := mw.editor.Document().RootFrame()
+	frameFmt := root.FrameFormat()
+	frameFmt.SetTopMargin(InchesToPx(mw.margins.Top))
+	frameFmt.SetRightMargin(InchesToPx(mw.margins.Right))
+	frameFmt.SetBottomMargin(InchesToPx(mw.margins.Bottom))
+	frameFmt.SetLeftMargin(InchesToPx(mw.margins.Left))
+	root.SetFrameFormat(frameFmt)
+	mw.editor.Viewport().Update()
+}
+
+func (mw *MainWindow) paintMarginGuides() {
+	vp := mw.editor.Viewport()
+	w := vp.Width()
+	h := vp.Height()
+	if w <= 0 || h <= 0 {
+		return
+	}
+
+	scrollX := mw.editor.HorizontalScrollBar().Value()
+	leftX := int(InchesToPx(mw.margins.Left)) - scrollX
+	rightX := w - int(InchesToPx(mw.margins.Right)) - scrollX
+
+	painter := qt6.NewQPainter2(vp.QPaintDevice)
+	defer painter.End()
+
+	guideColor := qt6.NewQColor11(128, 128, 128, 90)
+	painter.SetPen(guideColor)
+
+	if leftX > 0 && leftX < w {
+		painter.DrawLine2(leftX, 0, leftX, h)
+	}
+	if rightX > 0 && rightX < w && rightX != leftX {
+		painter.DrawLine2(rightX, 0, rightX, h)
+	}
+}
+
+func (mw *MainWindow) applyEditorTheme() {
+	switch mw.settings.Theme {
+	case ThemeLight:
+		mw.editor.SetStyleSheet("QTextEdit { background-color: #ffffff; color: #1e1e1e; selection-background-color: #3b82f6; selection-color: #ffffff; }")
+	case ThemeDark:
+		mw.editor.SetStyleSheet("QTextEdit { background-color: #1e1e1e; color: #e6e6e6; selection-background-color: #2563eb; selection-color: #ffffff; }")
+	default:
+		mw.editor.SetStyleSheet("")
+	}
+	mw.editor.Viewport().Update()
+}
+
 func (mw *MainWindow) newFile() {
 	if !mw.maybeSave() {
 		return
 	}
 	mw.editor.Clear()
+	mw.margins = DefaultPageMargins()
+	mw.applyMargins()
 	mw.currentPath = ""
 	mw.editor.Document().SetModifiedWithBool(false)
 	mw.updateWindowTitle()
@@ -297,11 +413,16 @@ func (mw *MainWindow) openFile() {
 	switch DetectFormat(path) {
 	case FormatMarkdown:
 		mw.editor.SetMarkdown(content)
+		mw.margins = DefaultPageMargins()
 	case FormatPlainText:
 		mw.editor.SetPlainText(content)
+		mw.margins = DefaultPageMargins()
 	default:
 		mw.editor.SetHtml(content)
+		margins, _ := ExtractHTMLMargins(content)
+		mw.margins = margins
 	}
+	mw.applyMargins()
 
 	mw.currentPath = path
 	mw.editor.Document().SetModifiedWithBool(false)
@@ -331,7 +452,7 @@ func (mw *MainWindow) writeToPath(path string) bool {
 	case FormatPlainText:
 		content = mw.editor.ToPlainText()
 	default:
-		content = mw.editor.ToHtml()
+		content = InjectHTMLMargins(mw.editor.ToHtml(), mw.margins)
 	}
 
 	if err := WriteDocumentFile(path, content); err != nil {

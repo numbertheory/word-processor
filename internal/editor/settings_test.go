@@ -1,0 +1,49 @@
+package editor
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadSettingsMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nonexistent", "settings.json")
+	got, err := LoadSettings(path)
+	if err != nil {
+		t.Fatalf("LoadSettings missing file returned error: %v", err)
+	}
+	if got != DefaultAppSettings() {
+		t.Errorf("got %+v, want %+v", got, DefaultAppSettings())
+	}
+}
+
+func TestSaveAndLoadSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "word-processor", "settings.json")
+	want := AppSettings{Theme: ThemeLight}
+
+	if err := SaveSettings(path, want); err != nil {
+		t.Fatalf("SaveSettings failed: %v", err)
+	}
+
+	got, err := LoadSettings(path)
+	if err != nil {
+		t.Fatalf("LoadSettings failed: %v", err)
+	}
+	if got != want {
+		t.Errorf("LoadSettings = %+v, want %+v", got, want)
+	}
+}
+
+func TestLoadSettingsInvalidThemeFallsBackToSystem(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(path, []byte(`{"theme":"sepia"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadSettings(path)
+	if err != nil {
+		t.Fatalf("LoadSettings returned error: %v", err)
+	}
+	if got.Theme != ThemeSystem {
+		t.Errorf("got Theme=%q, want %q", got.Theme, ThemeSystem)
+	}
+}

@@ -1,12 +1,17 @@
 package editor
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
+
+const pixelsPerInch = 96.0
 
 // DocumentFormat represents the serialization format of a document.
 type DocumentFormat int
@@ -22,6 +27,73 @@ type DocumentStats struct {
 	Words      int
 	Characters int
 	Lines      int
+}
+
+// PageMargins stores page margins in inches.
+type PageMargins struct {
+	Top    float64
+	Right  float64
+	Bottom float64
+	Left   float64
+}
+
+// DefaultPageMargins returns standard 1-inch margins on all sides.
+func DefaultPageMargins() PageMargins {
+	return PageMargins{Top: 1.0, Right: 1.0, Bottom: 1.0, Left: 1.0}
+}
+
+// InchesToPx converts inches to device-independent pixels (96 DPI).
+func InchesToPx(inches float64) float64 {
+	if inches < 0 {
+		return 0
+	}
+	return inches * pixelsPerInch
+}
+
+var marginMetaRe = regexp.MustCompile(`(?i)<meta\s+name=["']word-processor-margins["']\s+content=["']([^"']*)["']\s*/?>`)
+var headOpenRe = regexp.MustCompile(`(?i)<head[^>]*>`)
+
+// InjectHTMLMargins embeds or updates the word-processor-margins meta tag in an HTML document.
+func InjectHTMLMargins(html string, m PageMargins) string {
+	metaTag := fmt.Sprintf(
+		`<meta name="word-processor-margins" content="%.2f,%.2f,%.2f,%.2f" />`,
+		m.Top, m.Right, m.Bottom, m.Left,
+	)
+
+	if marginMetaRe.MatchString(html) {
+		return marginMetaRe.ReplaceAllString(html, metaTag)
+	}
+	if loc := headOpenRe.FindStringIndex(html); loc != nil {
+		return html[:loc[1]] + "\n" + metaTag + html[loc[1]:]
+	}
+	return fmt.Sprintf("<head>\n%s\n</head>\n%s", metaTag, html)
+}
+
+// ExtractHTMLMargins parses the word-processor-margins meta tag from HTML, if present.
+func ExtractHTMLMargins(html string) (PageMargins, bool) {
+	matches := marginMetaRe.FindStringSubmatch(html)
+	if len(matches) < 2 {
+		return DefaultPageMargins(), false
+	}
+	parts := strings.Split(matches[1], ",")
+	if len(parts) != 4 {
+		return DefaultPageMargins(), false
+	}
+
+	vals := make([]float64, 4)
+	for i, p := range parts {
+		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
+		if err != nil || v < 0 {
+			return DefaultPageMargins(), false
+		}
+		vals[i] = v
+	}
+	return PageMargins{
+		Top:    vals[0],
+		Right:  vals[1],
+		Bottom: vals[2],
+		Left:   vals[3],
+	}, true
 }
 
 // DetectFormat determines the document format from a file path's extension.
