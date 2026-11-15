@@ -1,0 +1,11 @@
+# Binaries
+word-processor
+word-processor.exe
+*.app/
+dist/
+
+# Go / IDE
+*.test
+*.out
+.vscode/
+.idea/
