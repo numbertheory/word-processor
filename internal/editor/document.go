@@ -40,9 +40,21 @@ type PageMargins struct {
 	Left   float64
 }
 
+// PageSetup stores per-document page layout settings (margins and optional page colors).
+type PageSetup struct {
+	Margins         PageMargins
+	BackgroundColor string // Hex color "#rrggbb", or "" for default theme background
+	TextColor       string // Hex color "#rrggbb", or "" for default theme text color
+}
+
 // DefaultPageMargins returns standard 1-inch margins on all sides.
 func DefaultPageMargins() PageMargins {
 	return PageMargins{Top: 1.0, Right: 1.0, Bottom: 1.0, Left: 1.0}
+}
+
+// DefaultPageSetup returns default margins and no custom background color.
+func DefaultPageSetup() PageSetup {
+	return PageSetup{Margins: DefaultPageMargins()}
 }
 
 // InchesToPx converts inches to device-independent pixels (96 DPI).
@@ -53,34 +65,83 @@ func InchesToPx(inches float64) float64 {
 	return inches * pixelsPerInch
 }
 
-var marginMetaRe = regexp.MustCompile(`(?i)<meta\s+name=["']word-processor-margins["']\s+content=["']([^"']*)["']\s*/?>`)
+var marginMetaRe = regexp.MustCompile(`(?i)<meta\s+name=["']word-processor-margins["']\s+content=["']([^"']*)["']\s*/?>\s*`)
+var bgMetaRe = regexp.MustCompile(`(?i)<meta\s+name=["']word-processor-page-bg["']\s+content=["']([^"']*)["']\s*/?>\s*`)
+var fgMetaRe = regexp.MustCompile(`(?i)<meta\s+name=["']word-processor-page-fg["']\s+content=["']([^"']*)["']\s*/?>\s*`)
+var hexColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 var pageStyleRe = regexp.MustCompile(`(?is)<style\s+id=["']word-processor-page-style["'][^>]*>.*?</style>\s*`)
 var headOpenRe = regexp.MustCompile(`(?i)<head[^>]*>`)
+
+// IsValidHexColor reports whether s is a #rrggbb hex color string.
+func IsValidHexColor(s string) bool {
+	return hexColorRe.MatchString(s)
+}
 
 // InjectHTMLMargins embeds or updates the word-processor-margins meta tag
 // and responsive centered-page CSS for browsers in an HTML document.
 func InjectHTMLMargins(html string, m PageMargins) string {
-	metaTag := fmt.Sprintf(
+	return InjectHTMLPageSetup(html, PageSetup{Margins: m})
+}
+
+// InjectHTMLPageSetup embeds or updates page margin and background-color meta
+// tags plus browser page-layout CSS in an HTML document.
+func InjectHTMLPageSetup(html string, setup PageSetup) string {
+	m := setup.Margins
+	metaTags := fmt.Sprintf(
 		`<meta name="word-processor-margins" content="%.2f,%.2f,%.2f,%.2f" />`,
 		m.Top, m.Right, m.Bottom, m.Left,
 	)
+
+	bgCSS := ""
+	if IsValidHexColor(setup.BackgroundColor) {
+		metaTags += fmt.Sprintf("\n"+`<meta name="word-processor-page-bg" content="%s" />`, setup.BackgroundColor)
+		bgCSS = fmt.Sprintf(" html, body { background-color: %s !important; }", setup.BackgroundColor)
+	}
+	fgCSS := ""
+	if IsValidHexColor(setup.TextColor) {
+		metaTags += fmt.Sprintf("\n"+`<meta name="word-processor-page-fg" content="%s" />`, setup.TextColor)
+		fgCSS = fmt.Sprintf(" color: %s !important;", setup.TextColor)
+	}
+
 	pageStyle := fmt.Sprintf(
-		`<style id="word-processor-page-style">body { max-width: %.1fin; margin: 0 auto !important; padding: %.2fin %.2fin %.2fin %.2fin !important; box-sizing: border-box; } table[style*="-qt-table-type: root"] { margin: 0 !important; width: 100%%; }</style>`,
-		MaxPageWidthInches, m.Top, m.Right, m.Bottom, m.Left,
+		`<style id="word-processor-page-style">body { max-width: %.1fin; margin: 0 auto !important; padding: %.2fin %.2fin %.2fin %.2fin !important; box-sizing: border-box;%s } table[style*="-qt-table-type: root"] { margin: 0 !important; width: 100%%; }%s</style>`,
+		MaxPageWidthInches, m.Top, m.Right, m.Bottom, m.Left, fgCSS, bgCSS,
 	)
 
 	cleaned := pageStyleRe.ReplaceAllString(html, "")
-	if marginMetaRe.MatchString(cleaned) {
-		cleaned = marginMetaRe.ReplaceAllString(cleaned, metaTag)
-		if loc := headOpenRe.FindStringIndex(cleaned); loc != nil {
-			return cleaned[:loc[1]] + "\n" + pageStyle + cleaned[loc[1]:]
-		}
-		return pageStyle + "\n" + cleaned
-	}
+	cleaned = marginMetaRe.ReplaceAllString(cleaned, "")
+	cleaned = bgMetaRe.ReplaceAllString(cleaned, "")
+	cleaned = fgMetaRe.ReplaceAllString(cleaned, "")
+
+	block := metaTags + "\n" + pageStyle
 	if loc := headOpenRe.FindStringIndex(cleaned); loc != nil {
-		return cleaned[:loc[1]] + "\n" + metaTag + "\n" + pageStyle + cleaned[loc[1]:]
+		return cleaned[:loc[1]] + "\n" + block + "\n" + cleaned[loc[1]:]
 	}
-	return fmt.Sprintf("<head>\n%s\n%s\n</head>\n%s", metaTag, pageStyle, cleaned)
+	return fmt.Sprintf("<head>\n%s\n</head>\n%s", block, cleaned)
+}
+
+// ExtractHTMLPageSetup parses margin, page background-color, and default text-color meta tags from HTML.
+func ExtractHTMLPageSetup(html string) PageSetup {
+	margins, _ := ExtractHTMLMargins(html)
+	bg := ""
+	if matches := bgMetaRe.FindStringSubmatch(html); len(matches) >= 2 {
+		candidate := strings.TrimSpace(matches[1])
+		if IsValidHexColor(candidate) {
+			bg = candidate
+		}
+	}
+	fg := ""
+	if matches := fgMetaRe.FindStringSubmatch(html); len(matches) >= 2 {
+		candidate := strings.TrimSpace(matches[1])
+		if IsValidHexColor(candidate) {
+			fg = candidate
+		}
+	}
+	return PageSetup{
+		Margins:         margins,
+		BackgroundColor: bg,
+		TextColor:       fg,
+	}
 }
 
 // StripHTMLPageStyle removes the browser-only page centering style block so

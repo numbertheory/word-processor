@@ -15,9 +15,9 @@ const (
 )
 
 type documentTab struct {
-	editor   *qt6.QTextEdit
-	filePath string
-	margins  PageMargins
+	editor    *qt6.QTextEdit
+	filePath  string
+	pageSetup PageSetup
 }
 
 // MainWindow wraps the primary Qt6 application window and tabbed rich-text editor.
@@ -327,19 +327,19 @@ func (mw *MainWindow) findTabByPath(path string) (int, *documentTab) {
 	return -1, nil
 }
 
-func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit), margins PageMargins) *documentTab {
+func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit), pageSetup PageSetup) *documentTab {
 	ed := qt6.NewQTextEdit(mw.tabs.QWidget)
 	ed.SetAcceptRichText(true)
 	ed.SetFont(qt6.NewQFont6("Sans Serif", 12))
 
 	tab := &documentTab{
-		editor:   ed,
-		filePath: CanonicalPath(filePath),
-		margins:  margins,
+		editor:    ed,
+		filePath:  CanonicalPath(filePath),
+		pageSetup: pageSetup,
 	}
 	mw.tabByWidget[ed.QWidget.UnsafePointer()] = tab
 
-	mw.applyThemeToEditor(ed)
+	mw.applyThemeToTab(tab)
 	if loadContent != nil {
 		loadContent(ed)
 	}
@@ -517,13 +517,14 @@ func (mw *MainWindow) openPageSetup() {
 	if tab == nil {
 		return
 	}
-	updated, ok := showPageSetupDialog(mw.win.QWidget, tab.margins)
+	updated, ok := showPageSetupDialog(mw.win.QWidget, tab.pageSetup)
 	if !ok {
 		return
 	}
-	if updated != tab.margins {
-		tab.margins = updated
+	if updated != tab.pageSetup {
+		tab.pageSetup = updated
 		mw.applyMarginsToTab(tab)
+		mw.applyThemeToTab(tab)
 		tab.editor.Document().SetModifiedWithBool(true)
 	}
 }
@@ -543,8 +544,8 @@ func (mw *MainWindow) openSettings() {
 }
 
 func (mw *MainWindow) effectiveHorizontalMargins(tab *documentTab) (float64, float64) {
-	left := InchesToPx(tab.margins.Left)
-	right := InchesToPx(tab.margins.Right)
+	left := InchesToPx(tab.pageSetup.Margins.Left)
+	right := InchesToPx(tab.pageSetup.Margins.Right)
 
 	vpWidth := float64(tab.editor.Viewport().Width())
 	maxPagePx := InchesToPx(MaxPageWidthInches)
@@ -563,9 +564,9 @@ func (mw *MainWindow) applyMarginsToTab(tab *documentTab) {
 	left, right := mw.effectiveHorizontalMargins(tab)
 	root := doc.RootFrame()
 	frameFmt := root.FrameFormat()
-	frameFmt.SetTopMargin(InchesToPx(tab.margins.Top))
+	frameFmt.SetTopMargin(InchesToPx(tab.pageSetup.Margins.Top))
 	frameFmt.SetRightMargin(right)
-	frameFmt.SetBottomMargin(InchesToPx(tab.margins.Bottom))
+	frameFmt.SetBottomMargin(InchesToPx(tab.pageSetup.Margins.Bottom))
 	frameFmt.SetLeftMargin(left)
 	root.SetFrameFormat(frameFmt)
 
@@ -602,28 +603,49 @@ func (mw *MainWindow) paintMarginGuides(tab *documentTab) {
 	}
 }
 
-func (mw *MainWindow) applyThemeToEditor(ed *qt6.QTextEdit) {
-	switch mw.settings.Theme {
-	case ThemeLight:
-		ed.SetStyleSheet("QTextEdit { background-color: #ffffff; color: #1e1e1e; selection-background-color: #3b82f6; selection-color: #ffffff; }")
-	case ThemeDark:
-		ed.SetStyleSheet("QTextEdit { background-color: #1e1e1e; color: #e6e6e6; selection-background-color: #2563eb; selection-color: #ffffff; }")
-	default:
-		ed.SetStyleSheet("")
+func (mw *MainWindow) applyThemeToTab(tab *documentTab) {
+	opt, _ := FindTheme(mw.settings.Theme)
+	bg := opt.Background
+	if IsValidHexColor(tab.pageSetup.BackgroundColor) {
+		bg = tab.pageSetup.BackgroundColor
 	}
-	ed.Viewport().Update()
+	fg := opt.Foreground
+	if IsValidHexColor(tab.pageSetup.TextColor) {
+		fg = tab.pageSetup.TextColor
+	}
+
+	if opt.Mode == ThemeSystem {
+		rules := ""
+		if bg != "" {
+			rules += fmt.Sprintf(" background-color: %s;", bg)
+		}
+		if fg != "" {
+			rules += fmt.Sprintf(" color: %s;", fg)
+		}
+		if rules != "" {
+			tab.editor.SetStyleSheet(fmt.Sprintf("QTextEdit {%s }", rules))
+		} else {
+			tab.editor.SetStyleSheet("")
+		}
+	} else {
+		tab.editor.SetStyleSheet(fmt.Sprintf(
+			"QTextEdit { background-color: %s; color: %s; selection-background-color: %s; selection-color: %s; }",
+			bg, fg, opt.SelectionBg, opt.SelectionFg,
+		))
+	}
+	tab.editor.Viewport().Update()
 }
 
 func (mw *MainWindow) applyEditorThemeAll() {
 	for i := 0; i < mw.tabs.Count(); i++ {
 		if tab := mw.tabAt(i); tab != nil {
-			mw.applyThemeToEditor(tab.editor)
+			mw.applyThemeToTab(tab)
 		}
 	}
 }
 
 func (mw *MainWindow) newFile() {
-	mw.createTab("", nil, DefaultPageMargins())
+	mw.createTab("", nil, DefaultPageSetup())
 }
 
 func (mw *MainWindow) openFile() {
@@ -644,7 +666,7 @@ func (mw *MainWindow) openFile() {
 		return
 	}
 
-	margins := DefaultPageMargins()
+	pageSetup := DefaultPageSetup()
 	format := DetectFormat(path)
 	var loader func(*qt6.QTextEdit)
 
@@ -654,13 +676,12 @@ func (mw *MainWindow) openFile() {
 	case FormatPlainText:
 		loader = func(ed *qt6.QTextEdit) { ed.SetPlainText(content) }
 	default:
-		extracted, _ := ExtractHTMLMargins(content)
-		margins = extracted
+		pageSetup = ExtractHTMLPageSetup(content)
 		cleanHTML := StripHTMLPageStyle(content)
 		loader = func(ed *qt6.QTextEdit) { ed.SetHtml(cleanHTML) }
 	}
 
-	mw.createTab(path, loader, margins)
+	mw.createTab(path, loader, pageSetup)
 }
 
 func (mw *MainWindow) saveCurrentTab() bool {
@@ -694,7 +715,7 @@ func (mw *MainWindow) writeTabToPath(tab *documentTab, path string) bool {
 	case FormatPlainText:
 		content = tab.editor.ToPlainText()
 	default:
-		content = InjectHTMLMargins(tab.editor.ToHtml(), tab.margins)
+		content = InjectHTMLPageSetup(tab.editor.ToHtml(), tab.pageSetup)
 	}
 
 	if err := WriteDocumentFile(path, content); err != nil {

@@ -1,6 +1,8 @@
 package editor
 
 import (
+	"fmt"
+
 	"github.com/mappu/miqt/qt6"
 )
 
@@ -14,22 +16,72 @@ func newMarginSpinBox(parent *qt6.QWidget, value float64) *qt6.QDoubleSpinBox {
 	return sb
 }
 
-func showPageSetupDialog(parent *qt6.QWidget, current PageMargins) (PageMargins, bool) {
+func updateColorButton(btn *qt6.QPushButton, hexColor string) {
+	if IsValidHexColor(hexColor) {
+		c := qt6.NewQColor6(hexColor)
+		labelColor := "#000000"
+		if (0.299*float64(c.Red()) + 0.587*float64(c.Green()) + 0.114*float64(c.Blue())) < 140 {
+			labelColor = "#ffffff"
+		}
+		btn.SetText(hexColor)
+		btn.SetStyleSheet(fmt.Sprintf("QPushButton { background-color: %s; color: %s; padding: 4px 10px; }", hexColor, labelColor))
+	} else {
+		btn.SetText("Theme Default")
+		btn.SetStyleSheet("")
+	}
+}
+
+func newColorPickerRow(dlg *qt6.QDialog, title, defaultHex string, value *string) *qt6.QWidget {
+	row := qt6.NewQWidget(dlg.QWidget)
+	rowLayout := qt6.NewQHBoxLayout(row)
+	rowLayout.SetContentsMargins(0, 0, 0, 0)
+
+	colorBtn := qt6.NewQPushButton(row)
+	updateColorButton(colorBtn, *value)
+	colorBtn.OnClicked(func() {
+		initial := qt6.NewQColor6(defaultHex)
+		if IsValidHexColor(*value) {
+			initial = qt6.NewQColor6(*value)
+		}
+		chosen := qt6.QColorDialog_GetColor3(initial, dlg.QWidget, title)
+		if chosen.IsValid() {
+			*value = chosen.Name()
+			updateColorButton(colorBtn, *value)
+		}
+	})
+
+	resetBtn := qt6.NewQPushButton5("Reset", row)
+	resetBtn.OnClicked(func() {
+		*value = ""
+		updateColorButton(colorBtn, *value)
+	})
+
+	rowLayout.AddWidget(colorBtn.QWidget)
+	rowLayout.AddWidget(resetBtn.QWidget)
+	return row
+}
+
+func showPageSetupDialog(parent *qt6.QWidget, current PageSetup) (PageSetup, bool) {
 	dlg := qt6.NewQDialog(parent)
 	dlg.SetWindowTitle("Page Setup")
 	dlg.SetModal(true)
 
 	layout := qt6.NewQFormLayout(dlg.QWidget)
 
-	topSpin := newMarginSpinBox(dlg.QWidget, current.Top)
-	bottomSpin := newMarginSpinBox(dlg.QWidget, current.Bottom)
-	leftSpin := newMarginSpinBox(dlg.QWidget, current.Left)
-	rightSpin := newMarginSpinBox(dlg.QWidget, current.Right)
+	topSpin := newMarginSpinBox(dlg.QWidget, current.Margins.Top)
+	bottomSpin := newMarginSpinBox(dlg.QWidget, current.Margins.Bottom)
+	leftSpin := newMarginSpinBox(dlg.QWidget, current.Margins.Left)
+	rightSpin := newMarginSpinBox(dlg.QWidget, current.Margins.Right)
 
 	layout.AddRow3("Top Margin:", topSpin.QWidget)
 	layout.AddRow3("Bottom Margin:", bottomSpin.QWidget)
 	layout.AddRow3("Left Margin:", leftSpin.QWidget)
 	layout.AddRow3("Right Margin:", rightSpin.QWidget)
+
+	bgColor := current.BackgroundColor
+	fgColor := current.TextColor
+	layout.AddRow3("Page Background:", newColorPickerRow(dlg, "Page Background Color", "#ffffff", &bgColor))
+	layout.AddRow3("Default Text Color:", newColorPickerRow(dlg, "Default Text Color", "#1e1e1e", &fgColor))
 
 	buttons := qt6.NewQDialogButtonBox4(qt6.QDialogButtonBox__Ok | qt6.QDialogButtonBox__Cancel)
 	buttons.OnAccepted(dlg.Accept)
@@ -40,11 +92,15 @@ func showPageSetupDialog(parent *qt6.QWidget, current PageMargins) (PageMargins,
 		return current, false
 	}
 
-	return PageMargins{
-		Top:    topSpin.Value(),
-		Right:  rightSpin.Value(),
-		Bottom: bottomSpin.Value(),
-		Left:   leftSpin.Value(),
+	return PageSetup{
+		Margins: PageMargins{
+			Top:    topSpin.Value(),
+			Right:  rightSpin.Value(),
+			Bottom: bottomSpin.Value(),
+			Left:   leftSpin.Value(),
+		},
+		BackgroundColor: bgColor,
+		TextColor:       fgColor,
 	}, true
 }
 
@@ -56,18 +112,15 @@ func showSettingsDialog(parent *qt6.QWidget, current AppSettings) (AppSettings, 
 	layout := qt6.NewQFormLayout(dlg.QWidget)
 
 	themeCombo := qt6.NewQComboBox(dlg.QWidget)
-	themeCombo.AddItem("System (Default)")
-	themeCombo.AddItem("Light")
-	themeCombo.AddItem("Dark")
-
-	switch current.Theme {
-	case ThemeLight:
-		themeCombo.SetCurrentIndex(1)
-	case ThemeDark:
-		themeCombo.SetCurrentIndex(2)
-	default:
-		themeCombo.SetCurrentIndex(0)
+	themes := AvailableThemes()
+	selectedIdx := 0
+	for i, opt := range themes {
+		themeCombo.AddItem(opt.Label)
+		if opt.Mode == current.Theme {
+			selectedIdx = i
+		}
 	}
+	themeCombo.SetCurrentIndex(selectedIdx)
 
 	layout.AddRow3("Editor Theme:", themeCombo.QWidget)
 
@@ -80,14 +133,10 @@ func showSettingsDialog(parent *qt6.QWidget, current AppSettings) (AppSettings, 
 		return current, false
 	}
 
-	var mode ThemeMode
-	switch themeCombo.CurrentIndex() {
-	case 1:
-		mode = ThemeLight
-	case 2:
-		mode = ThemeDark
-	default:
-		mode = ThemeSystem
+	idx := themeCombo.CurrentIndex()
+	mode := ThemeSystem
+	if idx >= 0 && idx < len(themes) {
+		mode = themes[idx].Mode
 	}
 
 	return AppSettings{Theme: mode}, true

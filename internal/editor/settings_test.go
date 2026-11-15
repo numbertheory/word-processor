@@ -47,3 +47,20 @@ func TestLoadSettingsInvalidThemeFallsBackToSystem(t *testing.T) {
 		t.Errorf("got Theme=%q, want %q", got.Theme, ThemeSystem)
 	}
 }
+
+func TestSaveAndLoadAllThemes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	for _, opt := range AvailableThemes() {
+		want := AppSettings{Theme: opt.Mode}
+		if err := SaveSettings(path, want); err != nil {
+			t.Fatalf("SaveSettings(%q) failed: %v", opt.Mode, err)
+		}
+		got, err := LoadSettings(path)
+		if err != nil {
+			t.Fatalf("LoadSettings(%q) failed: %v", opt.Mode, err)
+		}
+		if got != want {
+			t.Errorf("theme %q round-trip: got %+v, want %+v", opt.Mode, got, want)
+		}
+	}
+}

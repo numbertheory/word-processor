@@ -155,3 +155,26 @@ func TestInchesToPx(t *testing.T) {
 		t.Errorf("InchesToPx(-0.5) = %v, want 0", got)
 	}
 }
+
+func TestInjectAndExtractHTMLPageSetup(t *testing.T) {
+	setup := PageSetup{
+		Margins:         PageMargins{Top: 1.0, Right: 1.5, Bottom: 1.0, Left: 1.5},
+		BackgroundColor: "#fdf6e3",
+		TextColor:       "#1e1e1e",
+	}
+	html := "<html><head></head><body><p>Hello</p></body></html>"
+
+	withSetup := InjectHTMLPageSetup(html, setup)
+	got := ExtractHTMLPageSetup(withSetup)
+	if got != setup {
+		t.Errorf("ExtractHTMLPageSetup = %+v, want %+v", got, setup)
+	}
+
+	// Clearing colors removes both color meta tags.
+	cleared := PageSetup{Margins: setup.Margins}
+	withCleared := InjectHTMLPageSetup(withSetup, cleared)
+	gotCleared := ExtractHTMLPageSetup(withCleared)
+	if gotCleared != cleared {
+		t.Errorf("cleared ExtractHTMLPageSetup = %+v, want %+v", gotCleared, cleared)
+	}
+}
