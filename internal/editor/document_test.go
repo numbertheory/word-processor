@@ -36,6 +36,18 @@ func TestDisplayName(t *testing.T) {
 	}
 }
 
+func TestCanonicalPath(t *testing.T) {
+	if got := CanonicalPath(""); got != "" {
+		t.Errorf("CanonicalPath(\"\") = %q, want empty", got)
+	}
+	dir := t.TempDir()
+	a := filepath.Join(dir, "sub", "..", "doc.html")
+	b := filepath.Join(dir, "doc.html")
+	if CanonicalPath(a) != CanonicalPath(b) {
+		t.Errorf("CanonicalPath(%q) != CanonicalPath(%q)", a, b)
+	}
+}
+
 func TestComputeStats(t *testing.T) {
 	tests := []struct {
 		name string

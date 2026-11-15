@@ -2,6 +2,7 @@ package editor
 
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/mappu/miqt/qt6"
 )
@@ -13,30 +14,41 @@ const (
 	defaultOpenDir = ""
 )
 
-// MainWindow wraps the primary Qt6 application window and rich-text editor.
+type documentTab struct {
+	editor   *qt6.QTextEdit
+	filePath string
+	margins  PageMargins
+}
+
+// MainWindow wraps the primary Qt6 application window and tabbed rich-text editor.
 type MainWindow struct {
 	win         *qt6.QMainWindow
-	editor      *qt6.QTextEdit
+	tabs        *qt6.QTabWidget
+	tabByWidget map[unsafe.Pointer]*documentTab
 	format      *formatControls
 	statsLabel  *qt6.QLabel
 	cursorLabel *qt6.QLabel
 
-	currentPath  string
-	margins      PageMargins
+	undoAct *qt6.QAction
+	redoAct *qt6.QAction
+	cutAct  *qt6.QAction
+	copyAct *qt6.QAction
+
 	settings     AppSettings
 	settingsPath string
 }
 
-// NewMainWindow constructs and wires the rich-text editor window.
+// NewMainWindow constructs and wires the tabbed rich-text editor window.
 func NewMainWindow() *MainWindow {
 	win := qt6.NewQMainWindow2()
 	win.Resize(1024, 720)
 
-	editor := qt6.NewQTextEdit(win.QWidget)
-	editor.SetAcceptRichText(true)
-	defaultFont := qt6.NewQFont6("Sans Serif", 12)
-	editor.SetFont(defaultFont)
-	win.SetCentralWidget(editor.QWidget)
+	tabs := qt6.NewQTabWidget(win.QWidget)
+	tabs.SetTabPosition(qt6.QTabWidget__South)
+	tabs.SetTabsClosable(true)
+	tabs.SetMovable(true)
+	tabs.SetDocumentMode(true)
+	win.SetCentralWidget(tabs.QWidget)
 
 	settingsPath, _ := DefaultSettingsPath()
 	settings := DefaultAppSettings()
@@ -48,20 +60,17 @@ func NewMainWindow() *MainWindow {
 
 	mw := &MainWindow{
 		win:          win,
-		editor:       editor,
-		format:       newFormatControls(win, editor),
-		margins:      DefaultPageMargins(),
+		tabs:         tabs,
+		tabByWidget:  make(map[unsafe.Pointer]*documentTab),
+		format:       newFormatControls(win),
 		settings:     settings,
 		settingsPath: settingsPath,
 	}
 
 	mw.setupToolbars()
 	mw.setupStatusBar()
-	mw.connectSignals()
-	mw.applyEditorTheme()
-	mw.applyMargins()
-	mw.updateWindowTitle()
-	mw.updateStatusBar()
+	mw.connectWindowSignals()
+	mw.newFile()
 
 	return mw
 }
@@ -84,7 +93,7 @@ func (mw *MainWindow) setupToolbars() {
 		mw.win.QObject,
 	)
 	newAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__New))
-	newAct.SetToolTip("New Document (Ctrl+N)")
+	newAct.SetToolTip("New Tab (Ctrl+N)")
 	newAct.OnTriggered(mw.newFile)
 	mainTB.AddAction(newAct)
 
@@ -94,7 +103,7 @@ func (mw *MainWindow) setupToolbars() {
 		mw.win.QObject,
 	)
 	openAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Open))
-	openAct.SetToolTip("Open Document (Ctrl+O)")
+	openAct.SetToolTip("Open Document in New Tab (Ctrl+O)")
 	openAct.OnTriggered(mw.openFile)
 	mainTB.AddAction(openAct)
 
@@ -105,7 +114,7 @@ func (mw *MainWindow) setupToolbars() {
 	)
 	saveAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Save))
 	saveAct.SetToolTip("Save Document (Ctrl+S)")
-	saveAct.OnTriggered(func() { mw.saveFile() })
+	saveAct.OnTriggered(func() { mw.saveCurrentTab() })
 	mainTB.AddAction(saveAct)
 
 	saveAsAct := qt6.NewQAction6(
@@ -115,7 +124,11 @@ func (mw *MainWindow) setupToolbars() {
 	)
 	saveAsAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__SaveAs))
 	saveAsAct.SetToolTip("Save As... (Ctrl+Shift+S)")
-	saveAsAct.OnTriggered(func() { mw.saveFileAs() })
+	saveAsAct.OnTriggered(func() {
+		if tab := mw.currentTab(); tab != nil {
+			mw.saveTabAs(tab)
+		}
+	})
 	mainTB.AddAction(saveAsAct)
 
 	quitAct := qt6.NewQAction5("Quit", mw.win.QObject)
@@ -126,55 +139,67 @@ func (mw *MainWindow) setupToolbars() {
 	// Edit actions
 	mainTB.AddSeparator()
 
-	undoAct := qt6.NewQAction6(
+	mw.undoAct = qt6.NewQAction6(
 		loadActionIcon(mw.win.QWidget, "↶", "edit-undo"),
 		"Undo",
 		mw.win.QObject,
 	)
-	undoAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Undo))
-	undoAct.SetToolTip("Undo (Ctrl+Z)")
-	undoAct.SetEnabled(false)
-	undoAct.OnTriggered(mw.editor.Undo)
-	mw.editor.OnUndoAvailable(undoAct.SetEnabled)
-	mainTB.AddAction(undoAct)
+	mw.undoAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Undo))
+	mw.undoAct.SetToolTip("Undo (Ctrl+Z)")
+	mw.undoAct.SetEnabled(false)
+	mw.undoAct.OnTriggered(func() {
+		if tab := mw.currentTab(); tab != nil {
+			tab.editor.Undo()
+		}
+	})
+	mainTB.AddAction(mw.undoAct)
 
-	redoAct := qt6.NewQAction6(
+	mw.redoAct = qt6.NewQAction6(
 		loadActionIcon(mw.win.QWidget, "↷", "edit-redo"),
 		"Redo",
 		mw.win.QObject,
 	)
-	redoAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Redo))
-	redoAct.SetToolTip("Redo (Ctrl+Y)")
-	redoAct.SetEnabled(false)
-	redoAct.OnTriggered(mw.editor.Redo)
-	mw.editor.OnRedoAvailable(redoAct.SetEnabled)
-	mainTB.AddAction(redoAct)
+	mw.redoAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Redo))
+	mw.redoAct.SetToolTip("Redo (Ctrl+Y)")
+	mw.redoAct.SetEnabled(false)
+	mw.redoAct.OnTriggered(func() {
+		if tab := mw.currentTab(); tab != nil {
+			tab.editor.Redo()
+		}
+	})
+	mainTB.AddAction(mw.redoAct)
 
 	mainTB.AddSeparator()
 
-	cutAct := qt6.NewQAction6(
+	mw.cutAct = qt6.NewQAction6(
 		loadActionIcon(mw.win.QWidget, "✂", "edit-cut"),
 		"Cut",
 		mw.win.QObject,
 	)
-	cutAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Cut))
-	cutAct.SetToolTip("Cut (Ctrl+X)")
-	cutAct.SetEnabled(false)
-	cutAct.OnTriggered(mw.editor.Cut)
-	mw.editor.OnCopyAvailable(cutAct.SetEnabled)
-	mainTB.AddAction(cutAct)
+	mw.cutAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Cut))
+	mw.cutAct.SetToolTip("Cut (Ctrl+X)")
+	mw.cutAct.SetEnabled(false)
+	mw.cutAct.OnTriggered(func() {
+		if tab := mw.currentTab(); tab != nil {
+			tab.editor.Cut()
+		}
+	})
+	mainTB.AddAction(mw.cutAct)
 
-	copyAct := qt6.NewQAction6(
+	mw.copyAct = qt6.NewQAction6(
 		loadActionIcon(mw.win.QWidget, "C", "edit-copy"),
 		"Copy",
 		mw.win.QObject,
 	)
-	copyAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Copy))
-	copyAct.SetToolTip("Copy (Ctrl+C)")
-	copyAct.SetEnabled(false)
-	copyAct.OnTriggered(mw.editor.Copy)
-	mw.editor.OnCopyAvailable(copyAct.SetEnabled)
-	mainTB.AddAction(copyAct)
+	mw.copyAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Copy))
+	mw.copyAct.SetToolTip("Copy (Ctrl+C)")
+	mw.copyAct.SetEnabled(false)
+	mw.copyAct.OnTriggered(func() {
+		if tab := mw.currentTab(); tab != nil {
+			tab.editor.Copy()
+		}
+	})
+	mainTB.AddAction(mw.copyAct)
 
 	pasteAct := qt6.NewQAction6(
 		loadActionIcon(mw.win.QWidget, "P", "edit-paste"),
@@ -183,12 +208,20 @@ func (mw *MainWindow) setupToolbars() {
 	)
 	pasteAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__Paste))
 	pasteAct.SetToolTip("Paste (Ctrl+V)")
-	pasteAct.OnTriggered(mw.editor.Paste)
+	pasteAct.OnTriggered(func() {
+		if tab := mw.currentTab(); tab != nil {
+			tab.editor.Paste()
+		}
+	})
 	mainTB.AddAction(pasteAct)
 
 	selectAllAct := qt6.NewQAction5("Select All", mw.win.QObject)
 	selectAllAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__SelectAll))
-	selectAllAct.OnTriggered(mw.editor.SelectAll)
+	selectAllAct.OnTriggered(func() {
+		if tab := mw.currentTab(); tab != nil {
+			tab.editor.SelectAll()
+		}
+	})
 	mw.win.AddAction(selectAllAct)
 
 	// Page Setup, Application Settings, and Help
@@ -242,65 +275,236 @@ func (mw *MainWindow) setupStatusBar() {
 	sb.AddPermanentWidget(mw.cursorLabel.QWidget)
 }
 
-func (mw *MainWindow) connectSignals() {
-	mw.editor.OnTextChanged(mw.updateStatusBar)
-	mw.editor.OnCursorPositionChanged(func() {
-		mw.updateStatusBar()
-		mw.format.syncFromCursor()
+func (mw *MainWindow) connectWindowSignals() {
+	mw.tabs.OnCurrentChanged(func(index int) {
+		mw.onActiveTabChanged(index)
 	})
-	mw.editor.OnCurrentCharFormatChanged(func(fmt *qt6.QTextCharFormat) {
-		mw.format.syncFromFormat(fmt)
-	})
-	mw.editor.Document().OnModificationChanged(func(changed bool) {
-		mw.updateWindowTitle()
-	})
-
-	mw.editor.OnPaintEvent(func(super func(e *qt6.QPaintEvent), e *qt6.QPaintEvent) {
-		super(e)
-		mw.paintMarginGuides()
+	mw.tabs.OnTabCloseRequested(func(index int) {
+		mw.closeTab(index)
 	})
 
 	mw.win.OnCloseEvent(func(super func(event *qt6.QCloseEvent), event *qt6.QCloseEvent) {
-		if mw.maybeSave() {
-			event.Accept()
-			return
+		for i := 0; i < mw.tabs.Count(); i++ {
+			tab := mw.tabAt(i)
+			if tab != nil && tab.editor.Document().IsModified() {
+				mw.tabs.SetCurrentIndex(i)
+				if !mw.maybeSaveTab(tab) {
+					event.Ignore()
+					return
+				}
+			}
 		}
-		event.Ignore()
+		event.Accept()
 	})
 }
 
+func (mw *MainWindow) tabAt(index int) *documentTab {
+	if index < 0 || index >= mw.tabs.Count() {
+		return nil
+	}
+	w := mw.tabs.Widget(index)
+	if w == nil {
+		return nil
+	}
+	return mw.tabByWidget[w.UnsafePointer()]
+}
+
+func (mw *MainWindow) currentTab() *documentTab {
+	return mw.tabAt(mw.tabs.CurrentIndex())
+}
+
+func (mw *MainWindow) findTabByPath(path string) (int, *documentTab) {
+	target := CanonicalPath(path)
+	if target == "" {
+		return -1, nil
+	}
+	for i := 0; i < mw.tabs.Count(); i++ {
+		tab := mw.tabAt(i)
+		if tab != nil && tab.filePath != "" && CanonicalPath(tab.filePath) == target {
+			return i, tab
+		}
+	}
+	return -1, nil
+}
+
+func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit), margins PageMargins) *documentTab {
+	ed := qt6.NewQTextEdit(mw.tabs.QWidget)
+	ed.SetAcceptRichText(true)
+	ed.SetFont(qt6.NewQFont6("Sans Serif", 12))
+
+	tab := &documentTab{
+		editor:   ed,
+		filePath: CanonicalPath(filePath),
+		margins:  margins,
+	}
+	mw.tabByWidget[ed.QWidget.UnsafePointer()] = tab
+
+	mw.applyThemeToEditor(ed)
+	if loadContent != nil {
+		loadContent(ed)
+	}
+	mw.applyMarginsToTab(tab)
+	ed.Document().SetModifiedWithBool(false)
+
+	ed.OnTextChanged(func() {
+		if mw.currentTab() == tab {
+			mw.updateStatusBar()
+		}
+	})
+	ed.OnCursorPositionChanged(func() {
+		if mw.currentTab() == tab {
+			mw.updateStatusBar()
+			mw.format.syncFromCursor()
+		}
+	})
+	ed.OnCurrentCharFormatChanged(func(fmt *qt6.QTextCharFormat) {
+		if mw.currentTab() == tab {
+			mw.format.syncFromFormat(fmt)
+		}
+	})
+	ed.Document().OnModificationChanged(func(changed bool) {
+		mw.updateTabTitle(tab)
+		if mw.currentTab() == tab {
+			mw.updateWindowTitle()
+		}
+	})
+	ed.OnUndoAvailable(func(avail bool) {
+		if mw.currentTab() == tab {
+			mw.undoAct.SetEnabled(avail)
+		}
+	})
+	ed.OnRedoAvailable(func(avail bool) {
+		if mw.currentTab() == tab {
+			mw.redoAct.SetEnabled(avail)
+		}
+	})
+	ed.OnCopyAvailable(func(avail bool) {
+		if mw.currentTab() == tab {
+			mw.cutAct.SetEnabled(avail)
+			mw.copyAct.SetEnabled(avail)
+		}
+	})
+	ed.OnPaintEvent(func(super func(e *qt6.QPaintEvent), e *qt6.QPaintEvent) {
+		super(e)
+		mw.paintMarginGuides(tab)
+	})
+	ed.OnResizeEvent(func(super func(e *qt6.QResizeEvent), e *qt6.QResizeEvent) {
+		super(e)
+		mw.applyMarginsToTab(tab)
+	})
+
+	idx := mw.tabs.AddTab(ed.QWidget, DisplayName(tab.filePath))
+	if tab.filePath != "" {
+		mw.tabs.SetTabToolTip(idx, tab.filePath)
+	}
+	mw.tabs.SetCurrentIndex(idx)
+	ed.SetFocus()
+	return tab
+}
+
+func (mw *MainWindow) onActiveTabChanged(index int) {
+	tab := mw.tabAt(index)
+	if tab == nil {
+		mw.format.setEditor(nil)
+		mw.undoAct.SetEnabled(false)
+		mw.redoAct.SetEnabled(false)
+		mw.cutAct.SetEnabled(false)
+		mw.copyAct.SetEnabled(false)
+		mw.updateWindowTitle()
+		mw.updateStatusBar()
+		return
+	}
+
+	mw.format.setEditor(tab.editor)
+	mw.format.syncFromFormat(tab.editor.CurrentCharFormat())
+	mw.format.syncFromCursor()
+
+	doc := tab.editor.Document()
+	mw.undoAct.SetEnabled(doc.IsUndoAvailable())
+	mw.redoAct.SetEnabled(doc.IsRedoAvailable())
+	hasSel := tab.editor.TextCursor().HasSelection()
+	mw.cutAct.SetEnabled(hasSel)
+	mw.copyAct.SetEnabled(hasSel)
+
+	mw.updateWindowTitle()
+	mw.updateStatusBar()
+	tab.editor.SetFocus()
+}
+
+func (mw *MainWindow) closeTab(index int) {
+	tab := mw.tabAt(index)
+	if tab == nil {
+		return
+	}
+	if !mw.maybeSaveTab(tab) {
+		return
+	}
+	delete(mw.tabByWidget, tab.editor.QWidget.UnsafePointer())
+	mw.tabs.RemoveTab(index)
+
+	if mw.tabs.Count() == 0 {
+		mw.newFile()
+	}
+}
+
+func (mw *MainWindow) updateTabTitle(tab *documentTab) {
+	idx := mw.tabs.IndexOf(tab.editor.QWidget)
+	if idx < 0 {
+		return
+	}
+	title := DisplayName(tab.filePath)
+	if tab.editor.Document().IsModified() {
+		title += "*"
+	}
+	mw.tabs.SetTabText(idx, title)
+	if tab.filePath != "" {
+		mw.tabs.SetTabToolTip(idx, tab.filePath)
+	}
+}
+
 func (mw *MainWindow) updateWindowTitle() {
-	name := DisplayName(mw.currentPath)
+	tab := mw.currentTab()
+	if tab == nil {
+		mw.win.SetWindowTitle(appTitle)
+		return
+	}
+	name := DisplayName(tab.filePath)
 	modified := ""
-	if mw.editor.Document().IsModified() {
+	if tab.editor.Document().IsModified() {
 		modified = "*"
 	}
 	mw.win.SetWindowTitle(fmt.Sprintf("%s%s — %s", name, modified, appTitle))
 }
 
 func (mw *MainWindow) updateStatusBar() {
-	stats := ComputeStats(mw.editor.ToPlainText())
+	tab := mw.currentTab()
+	if tab == nil {
+		mw.statsLabel.SetText("")
+		mw.cursorLabel.SetText("")
+		return
+	}
+	stats := ComputeStats(tab.editor.ToPlainText())
 	mw.statsLabel.SetText(fmt.Sprintf("Words: %d   Characters: %d", stats.Words, stats.Characters))
 
-	cursor := mw.editor.TextCursor()
+	cursor := tab.editor.TextCursor()
 	mw.cursorLabel.SetText(fmt.Sprintf("Ln %d, Col %d", cursor.BlockNumber()+1, cursor.PositionInBlock()+1))
 }
 
-func (mw *MainWindow) maybeSave() bool {
-	if !mw.editor.Document().IsModified() {
+func (mw *MainWindow) maybeSaveTab(tab *documentTab) bool {
+	if tab == nil || !tab.editor.Document().IsModified() {
 		return true
 	}
 
 	res := qt6.QMessageBox_Warning5(
 		mw.win.QWidget,
 		appTitle,
-		"The document has unsaved changes.\nDo you want to save your changes?",
+		fmt.Sprintf("%q has unsaved changes.\nDo you want to save your changes?", DisplayName(tab.filePath)),
 		qt6.QMessageBox__Save|qt6.QMessageBox__Discard|qt6.QMessageBox__Cancel,
 	)
 
 	switch res {
 	case qt6.QMessageBox__Save:
-		return mw.saveFile()
+		return mw.saveTab(tab)
 	case qt6.QMessageBox__Discard:
 		return true
 	default:
@@ -309,14 +513,18 @@ func (mw *MainWindow) maybeSave() bool {
 }
 
 func (mw *MainWindow) openPageSetup() {
-	updated, ok := showPageSetupDialog(mw.win.QWidget, mw.margins)
+	tab := mw.currentTab()
+	if tab == nil {
+		return
+	}
+	updated, ok := showPageSetupDialog(mw.win.QWidget, tab.margins)
 	if !ok {
 		return
 	}
-	if updated != mw.margins {
-		mw.margins = updated
-		mw.applyMargins()
-		mw.editor.Document().SetModifiedWithBool(true)
+	if updated != tab.margins {
+		tab.margins = updated
+		mw.applyMarginsToTab(tab)
+		tab.editor.Document().SetModifiedWithBool(true)
 	}
 }
 
@@ -326,7 +534,7 @@ func (mw *MainWindow) openSettings() {
 		return
 	}
 	mw.settings = updated
-	mw.applyEditorTheme()
+	mw.applyEditorThemeAll()
 	if mw.settingsPath != "" {
 		if err := SaveSettings(mw.settingsPath, mw.settings); err != nil {
 			qt6.QMessageBox_Warning(mw.win.QWidget, "Settings Error", fmt.Sprintf("Could not save settings:\n%v", err))
@@ -334,28 +542,51 @@ func (mw *MainWindow) openSettings() {
 	}
 }
 
-func (mw *MainWindow) applyMargins() {
-	root := mw.editor.Document().RootFrame()
-	frameFmt := root.FrameFormat()
-	frameFmt.SetTopMargin(InchesToPx(mw.margins.Top))
-	frameFmt.SetRightMargin(InchesToPx(mw.margins.Right))
-	frameFmt.SetBottomMargin(InchesToPx(mw.margins.Bottom))
-	frameFmt.SetLeftMargin(InchesToPx(mw.margins.Left))
-	root.SetFrameFormat(frameFmt)
-	mw.editor.Viewport().Update()
+func (mw *MainWindow) effectiveHorizontalMargins(tab *documentTab) (float64, float64) {
+	left := InchesToPx(tab.margins.Left)
+	right := InchesToPx(tab.margins.Right)
+
+	vpWidth := float64(tab.editor.Viewport().Width())
+	maxPagePx := InchesToPx(MaxPageWidthInches)
+	if vpWidth > maxPagePx {
+		extra := (vpWidth - maxPagePx) / 2.0
+		left += extra
+		right += extra
+	}
+	return left, right
 }
 
-func (mw *MainWindow) paintMarginGuides() {
-	vp := mw.editor.Viewport()
+func (mw *MainWindow) applyMarginsToTab(tab *documentTab) {
+	doc := tab.editor.Document()
+	wasModified := doc.IsModified()
+
+	left, right := mw.effectiveHorizontalMargins(tab)
+	root := doc.RootFrame()
+	frameFmt := root.FrameFormat()
+	frameFmt.SetTopMargin(InchesToPx(tab.margins.Top))
+	frameFmt.SetRightMargin(right)
+	frameFmt.SetBottomMargin(InchesToPx(tab.margins.Bottom))
+	frameFmt.SetLeftMargin(left)
+	root.SetFrameFormat(frameFmt)
+
+	if !wasModified {
+		doc.SetModifiedWithBool(false)
+	}
+	tab.editor.Viewport().Update()
+}
+
+func (mw *MainWindow) paintMarginGuides(tab *documentTab) {
+	vp := tab.editor.Viewport()
 	w := vp.Width()
 	h := vp.Height()
 	if w <= 0 || h <= 0 {
 		return
 	}
 
-	scrollX := mw.editor.HorizontalScrollBar().Value()
-	leftX := int(InchesToPx(mw.margins.Left)) - scrollX
-	rightX := w - int(InchesToPx(mw.margins.Right)) - scrollX
+	leftMargin, rightMargin := mw.effectiveHorizontalMargins(tab)
+	scrollX := tab.editor.HorizontalScrollBar().Value()
+	leftX := int(leftMargin) - scrollX
+	rightX := w - int(rightMargin) - scrollX
 
 	painter := qt6.NewQPainter2(vp.QPaintDevice)
 	defer painter.End()
@@ -371,36 +602,39 @@ func (mw *MainWindow) paintMarginGuides() {
 	}
 }
 
-func (mw *MainWindow) applyEditorTheme() {
+func (mw *MainWindow) applyThemeToEditor(ed *qt6.QTextEdit) {
 	switch mw.settings.Theme {
 	case ThemeLight:
-		mw.editor.SetStyleSheet("QTextEdit { background-color: #ffffff; color: #1e1e1e; selection-background-color: #3b82f6; selection-color: #ffffff; }")
+		ed.SetStyleSheet("QTextEdit { background-color: #ffffff; color: #1e1e1e; selection-background-color: #3b82f6; selection-color: #ffffff; }")
 	case ThemeDark:
-		mw.editor.SetStyleSheet("QTextEdit { background-color: #1e1e1e; color: #e6e6e6; selection-background-color: #2563eb; selection-color: #ffffff; }")
+		ed.SetStyleSheet("QTextEdit { background-color: #1e1e1e; color: #e6e6e6; selection-background-color: #2563eb; selection-color: #ffffff; }")
 	default:
-		mw.editor.SetStyleSheet("")
+		ed.SetStyleSheet("")
 	}
-	mw.editor.Viewport().Update()
+	ed.Viewport().Update()
+}
+
+func (mw *MainWindow) applyEditorThemeAll() {
+	for i := 0; i < mw.tabs.Count(); i++ {
+		if tab := mw.tabAt(i); tab != nil {
+			mw.applyThemeToEditor(tab.editor)
+		}
+	}
 }
 
 func (mw *MainWindow) newFile() {
-	if !mw.maybeSave() {
-		return
-	}
-	mw.editor.Clear()
-	mw.margins = DefaultPageMargins()
-	mw.applyMargins()
-	mw.currentPath = ""
-	mw.editor.Document().SetModifiedWithBool(false)
-	mw.updateWindowTitle()
+	mw.createTab("", nil, DefaultPageMargins())
 }
 
 func (mw *MainWindow) openFile() {
-	if !mw.maybeSave() {
-		return
-	}
 	path := qt6.QFileDialog_GetOpenFileName4(mw.win.QWidget, "Open Document", defaultOpenDir, fileFilter)
 	if path == "" {
+		return
+	}
+
+	if idx, existing := mw.findTabByPath(path); existing != nil {
+		mw.tabs.SetCurrentIndex(idx)
+		existing.editor.SetFocus()
 		return
 	}
 
@@ -410,49 +644,57 @@ func (mw *MainWindow) openFile() {
 		return
 	}
 
-	switch DetectFormat(path) {
+	margins := DefaultPageMargins()
+	format := DetectFormat(path)
+	var loader func(*qt6.QTextEdit)
+
+	switch format {
 	case FormatMarkdown:
-		mw.editor.SetMarkdown(content)
-		mw.margins = DefaultPageMargins()
+		loader = func(ed *qt6.QTextEdit) { ed.SetMarkdown(content) }
 	case FormatPlainText:
-		mw.editor.SetPlainText(content)
-		mw.margins = DefaultPageMargins()
+		loader = func(ed *qt6.QTextEdit) { ed.SetPlainText(content) }
 	default:
-		margins, _ := ExtractHTMLMargins(content)
-		mw.editor.SetHtml(StripHTMLPageStyle(content))
-		mw.margins = margins
+		extracted, _ := ExtractHTMLMargins(content)
+		margins = extracted
+		cleanHTML := StripHTMLPageStyle(content)
+		loader = func(ed *qt6.QTextEdit) { ed.SetHtml(cleanHTML) }
 	}
-	mw.applyMargins()
 
-	mw.currentPath = path
-	mw.editor.Document().SetModifiedWithBool(false)
-	mw.updateWindowTitle()
+	mw.createTab(path, loader, margins)
 }
 
-func (mw *MainWindow) saveFile() bool {
-	if mw.currentPath == "" {
-		return mw.saveFileAs()
+func (mw *MainWindow) saveCurrentTab() bool {
+	tab := mw.currentTab()
+	if tab == nil {
+		return false
 	}
-	return mw.writeToPath(mw.currentPath)
+	return mw.saveTab(tab)
 }
 
-func (mw *MainWindow) saveFileAs() bool {
+func (mw *MainWindow) saveTab(tab *documentTab) bool {
+	if tab.filePath == "" {
+		return mw.saveTabAs(tab)
+	}
+	return mw.writeTabToPath(tab, tab.filePath)
+}
+
+func (mw *MainWindow) saveTabAs(tab *documentTab) bool {
 	path := qt6.QFileDialog_GetSaveFileName4(mw.win.QWidget, "Save Document", defaultOpenDir, fileFilter)
 	if path == "" {
 		return false
 	}
-	return mw.writeToPath(path)
+	return mw.writeTabToPath(tab, path)
 }
 
-func (mw *MainWindow) writeToPath(path string) bool {
+func (mw *MainWindow) writeTabToPath(tab *documentTab, path string) bool {
 	var content string
 	switch DetectFormat(path) {
 	case FormatMarkdown:
-		content = mw.editor.ToMarkdown()
+		content = tab.editor.ToMarkdown()
 	case FormatPlainText:
-		content = mw.editor.ToPlainText()
+		content = tab.editor.ToPlainText()
 	default:
-		content = InjectHTMLMargins(mw.editor.ToHtml(), mw.margins)
+		content = InjectHTMLMargins(tab.editor.ToHtml(), tab.margins)
 	}
 
 	if err := WriteDocumentFile(path, content); err != nil {
@@ -460,8 +702,11 @@ func (mw *MainWindow) writeToPath(path string) bool {
 		return false
 	}
 
-	mw.currentPath = path
-	mw.editor.Document().SetModifiedWithBool(false)
-	mw.updateWindowTitle()
+	tab.filePath = CanonicalPath(path)
+	tab.editor.Document().SetModifiedWithBool(false)
+	mw.updateTabTitle(tab)
+	if mw.currentTab() == tab {
+		mw.updateWindowTitle()
+	}
 	return true
 }

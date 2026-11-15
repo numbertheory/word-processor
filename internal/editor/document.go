@@ -11,7 +11,10 @@ import (
 	"unicode/utf8"
 )
 
-const pixelsPerInch = 96.0
+const (
+	pixelsPerInch      = 96.0
+	MaxPageWidthInches = 10.2
+)
 
 // DocumentFormat represents the serialization format of a document.
 type DocumentFormat int
@@ -62,8 +65,8 @@ func InjectHTMLMargins(html string, m PageMargins) string {
 		m.Top, m.Right, m.Bottom, m.Left,
 	)
 	pageStyle := fmt.Sprintf(
-		`<style id="word-processor-page-style">body { max-width: 10.2in; margin: 0 auto !important; padding: %.2fin %.2fin %.2fin %.2fin !important; box-sizing: border-box; } table[style*="-qt-table-type: root"] { margin: 0 !important; width: 100%%; }</style>`,
-		m.Top, m.Right, m.Bottom, m.Left,
+		`<style id="word-processor-page-style">body { max-width: %.1fin; margin: 0 auto !important; padding: %.2fin %.2fin %.2fin %.2fin !important; box-sizing: border-box; } table[style*="-qt-table-type: root"] { margin: 0 !important; width: 100%%; }</style>`,
+		MaxPageWidthInches, m.Top, m.Right, m.Bottom, m.Left,
 	)
 
 	cleaned := pageStyleRe.ReplaceAllString(html, "")
@@ -134,6 +137,21 @@ func DisplayName(path string) string {
 		return "Untitled"
 	}
 	return filepath.Base(path)
+}
+
+// CanonicalPath normalizes a file path for reliable duplicate-tab detection.
+func CanonicalPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
 }
 
 // ComputeStats calculates word, character, and line counts from plain text.

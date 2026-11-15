@@ -32,10 +32,8 @@ type formatControls struct {
 	syncing bool
 }
 
-func newFormatControls(parent *qt6.QMainWindow, editor *qt6.QTextEdit) *formatControls {
-	fc := &formatControls{
-		editor: editor,
-	}
+func newFormatControls(parent *qt6.QMainWindow) *formatControls {
+	fc := &formatControls{}
 
 	fc.fontCombo = qt6.NewQFontComboBox(parent.QWidget)
 	fc.fontCombo.SetToolTip("Font Family")
@@ -272,6 +270,10 @@ func (fc *formatControls) populateToolbar(tb *qt6.QToolBar) {
 
 	tb.AddAction(fc.bulletListAction)
 	tb.AddAction(fc.numberedListAction)
+}
+
+func (fc *formatControls) setEditor(editor *qt6.QTextEdit) {
+	fc.editor = editor
 }
 
 func (fc *formatControls) syncFromFormat(fmt *qt6.QTextCharFormat) {
