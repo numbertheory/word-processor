@@ -28,6 +28,7 @@ type DrawingItem struct {
 	Y           float64   `json:"y"`
 	Width       float64   `json:"width"`
 	Height      float64   `json:"height"`
+	Rotation    float64   `json:"rotation,omitempty"`
 	FillColor   string    `json:"fillColor"`
 	BorderColor string    `json:"borderColor"`
 	Background  string    `json:"background"`
@@ -67,7 +68,7 @@ func RenderDrawingSVG(item DrawingItem) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %.1f %.1f" width="%.1f" height="%.1f">`, w, h, w, h)
+	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %.1f %.1f" width="%.1f" height="%.1f" overflow="visible">`, w, h, w, h)
 
 	if item.Background != "" && item.Background != "transparent" {
 		fmt.Fprintf(&b, `<rect x="0" y="0" width="%.1f" height="%.1f" fill="%s" />`, w, h, item.Background)
@@ -75,6 +76,10 @@ func RenderDrawingSVG(item DrawingItem) string {
 
 	iw := math.Max(w-2*pad, 1)
 	ih := math.Max(h-2*pad, 1)
+
+	if item.Rotation != 0 {
+		fmt.Fprintf(&b, `<g transform="rotate(%.1f %.2f %.2f)">`, item.Rotation, w/2, h/2)
+	}
 
 	switch item.Shape {
 	case ShapeCircle:
@@ -123,6 +128,10 @@ func RenderDrawingSVG(item DrawingItem) string {
 			strings.Join(pts, " "), fill, stroke, strokeW)
 	}
 
+	if item.Rotation != 0 {
+		b.WriteString(`</g>`)
+	}
+
 	b.WriteString(`</svg>`)
 	return b.String()
 }
@@ -155,7 +164,7 @@ func InjectHTMLDrawings(html string, items []DrawingItem) string {
 	}
 
 	// Ensure body is positioned relatively and the Qt root table sits at z-index 1.
-	extraCSS := `<style id="word-processor-drawing-style">body { position: relative; } table[style*="-qt-table-type: root"] { position: relative; z-index: 1; }</style>`
+	extraCSS := `<style id="word-processor-drawing-style">body { position: relative; } table[style*="-qt-table-type: root"] { position: relative; z-index: 1; } .wp-drawing, .wp-drawing svg { overflow: visible; }</style>`
 	if loc := headOpenRe.FindStringIndex(cleaned); loc != nil {
 		cleaned = cleaned[:loc[1]] + "\n" + extraCSS + cleaned[loc[1]:]
 	}

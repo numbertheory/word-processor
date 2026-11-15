@@ -2,6 +2,7 @@ package editor
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/mappu/miqt/qt6"
 )
@@ -140,4 +141,64 @@ func showSettingsDialog(parent *qt6.QWidget, current AppSettings) (AppSettings, 
 	}
 
 	return AppSettings{Theme: mode}, true
+}
+
+func showRotationDialog(parent *qt6.QWidget, currentDeg float64, onPreview func(float64)) (float64, bool) {
+	dlg := qt6.NewQDialog(parent)
+	dlg.SetWindowTitle("Rotation")
+	dlg.SetModal(true)
+	dlg.SetMinimumWidth(320)
+
+	layout := qt6.NewQVBoxLayout(dlg.QWidget)
+
+	row := qt6.NewQWidget(dlg.QWidget)
+	rowLayout := qt6.NewQHBoxLayout(row)
+	rowLayout.SetContentsMargins(0, 0, 0, 0)
+
+	slider := qt6.NewQSlider4(qt6.Horizontal, row)
+	slider.SetRange(-180, 180)
+	slider.SetTickPosition(qt6.QSlider__TicksBelow)
+	slider.SetTickInterval(45)
+
+	initial := int(math.Round(currentDeg))
+	if initial < -180 {
+		initial = -180
+	} else if initial > 180 {
+		initial = 180
+	}
+	slider.SetValue(initial)
+
+	degLabel := qt6.NewQLabel3(fmt.Sprintf("%d°", initial))
+	degLabel.SetMinimumWidth(48)
+	degLabel.SetAlignment(qt6.AlignRight | qt6.AlignVCenter)
+
+	slider.OnValueChanged(func(val int) {
+		degLabel.SetText(fmt.Sprintf("%d°", val))
+		if onPreview != nil {
+			onPreview(float64(val))
+		}
+	})
+
+	rowLayout.AddWidget2(slider.QWidget, 1)
+	rowLayout.AddWidget(degLabel.QWidget)
+	layout.AddWidget(row)
+
+	buttons := qt6.NewQDialogButtonBox4(qt6.QDialogButtonBox__Ok | qt6.QDialogButtonBox__Cancel | qt6.QDialogButtonBox__Reset)
+	buttons.OnAccepted(dlg.Accept)
+	buttons.OnRejected(dlg.Reject)
+	if resetBtn := buttons.Button(qt6.QDialogButtonBox__Reset); resetBtn != nil {
+		resetBtn.OnClicked(func() {
+			slider.SetValue(0)
+		})
+	}
+	layout.AddWidget(buttons.QWidget)
+
+	if dlg.Exec() != int(qt6.QDialog__Accepted) {
+		if onPreview != nil {
+			onPreview(currentDeg)
+		}
+		return currentDeg, false
+	}
+
+	return float64(slider.Value()), true
 }

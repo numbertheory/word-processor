@@ -18,6 +18,13 @@ func TestRenderDrawingSVGAllShapes(t *testing.T) {
 			t.Errorf("shape %q missing background rect: %s", s, svg)
 		}
 	}
+
+	rotated := NewDrawingItem("id-rot", ShapeArrow, 50, 50)
+	rotated.Rotation = -45
+	svgRot := RenderDrawingSVG(rotated)
+	if !strings.Contains(svgRot, `transform="rotate(-45.0 60.00 60.00)"`) {
+		t.Errorf("rotated SVG missing expected transform: %s", svgRot)
+	}
 }
 
 func TestInjectStripExtractHTMLDrawings(t *testing.T) {

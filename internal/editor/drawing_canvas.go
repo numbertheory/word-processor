@@ -380,6 +380,21 @@ func (mw *MainWindow) handleDrawingContextMenu(tab *documentTab, e *qt6.QContext
 	})
 	menu.AddAction(clearBgAct)
 
+	rotateAct := qt6.NewQAction5("Rotation...", menu.QObject)
+	rotateAct.OnTriggered(func() {
+		origDeg := tab.drawings[idx].Rotation
+		newDeg, ok := showRotationDialog(mw.win.QWidget, origDeg, func(deg float64) {
+			tab.drawings[idx].Rotation = deg
+			tab.editor.Viewport().Update()
+		})
+		if ok && newDeg != origDeg {
+			tab.drawings[idx].Rotation = newDeg
+			tab.editor.Document().SetModifiedWithBool(true)
+			tab.editor.Viewport().Update()
+		}
+	})
+	menu.AddAction(rotateAct)
+
 	menu.AddSeparator()
 
 	frontAct := qt6.NewQAction5("Send to Front (Above Text)", menu.QObject)
