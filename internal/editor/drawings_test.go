@@ -25,6 +25,18 @@ func TestRenderDrawingSVGAllShapes(t *testing.T) {
 	if !strings.Contains(svgRot, `transform="rotate(-45.0 60.00 60.00)"`) {
 		t.Errorf("rotated SVG missing expected transform: %s", svgRot)
 	}
+
+	note := NewNoteItem("id-note", 40, 60)
+	note.FillColor = "#1e293b"
+	note.BorderColor = "#38bdf8"
+	note.Text = "Remember to check <margins> & fonts!"
+	noteSVG := RenderDrawingSVG(note)
+	if !strings.Contains(noteSVG, "Remember to check") || !strings.Contains(noteSVG, "&lt;margins&gt;") {
+		t.Errorf("note SVG missing escaped text: %s", noteSVG)
+	}
+	if !strings.Contains(noteSVG, `fill="#f8fafc"`) {
+		t.Errorf("dark note background should use light contrasting text: %s", noteSVG)
+	}
 }
 
 func TestInjectStripExtractHTMLDrawings(t *testing.T) {

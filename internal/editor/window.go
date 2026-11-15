@@ -327,6 +327,14 @@ func (mw *MainWindow) setupToolbars() {
 	}
 	drawBtn.SetMenu(drawMenu)
 	formatTB.AddWidget(drawBtn.QWidget)
+
+	noteBtn := qt6.NewQToolButton(formatTB.QWidget)
+	noteBtn.SetText("Note")
+	noteBtn.SetToolTip("Insert Sticky Note (right-click note to edit)")
+	noteBtn.OnClicked(func() {
+		mw.insertDrawing(ShapeNote)
+	})
+	formatTB.AddWidget(noteBtn.QWidget)
 }
 
 func (mw *MainWindow) setupStatusBar() {
@@ -393,6 +401,8 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 	ed := qt6.NewQTextEdit(mw.tabs.QWidget)
 	ed.SetAcceptRichText(true)
 	ed.SetFont(qt6.NewQFont6("Sans Serif", 12))
+	ed.SetMouseTracking(true)
+	ed.Viewport().SetMouseTracking(true)
 	ed.Viewport().SetAutoFillBackground(false)
 
 	spellTimer := qt6.NewQTimer2(ed.QObject)

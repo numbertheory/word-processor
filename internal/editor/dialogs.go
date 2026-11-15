@@ -206,3 +206,80 @@ func showRotationDialog(parent *qt6.QWidget, currentDeg float64, onPreview func(
 
 	return float64(slider.Value()), true
 }
+
+func showNoteDialog(parent *qt6.QWidget, current DrawingItem) (DrawingItem, bool, bool) {
+	dlg := qt6.NewQDialog(parent)
+	dlg.SetWindowTitle("Edit Note")
+	dlg.SetModal(true)
+	dlg.SetMinimumWidth(360)
+
+	layout := qt6.NewQFormLayout(dlg.QWidget)
+
+	textEdit := qt6.NewQPlainTextEdit(dlg.QWidget)
+	textEdit.SetPlainText(current.Text)
+	textEdit.SetMinimumHeight(120)
+	layout.AddRow3("Note Text:", textEdit.QWidget)
+
+	bgColor := current.FillColor
+	if !IsValidHexColor(bgColor) {
+		bgColor = "#fef08a"
+	}
+	bgBtn := qt6.NewQPushButton(dlg.QWidget)
+	updateColorButton(bgBtn, bgColor)
+	bgBtn.OnClicked(func() {
+		chosen := qt6.QColorDialog_GetColor3(qt6.NewQColor6(bgColor), dlg.QWidget, "Note Background Color")
+		if chosen.IsValid() {
+			bgColor = chosen.Name()
+			updateColorButton(bgBtn, bgColor)
+		}
+	})
+	layout.AddRow3("Background:", bgBtn.QWidget)
+
+	borderColor := current.BorderColor
+	if !IsValidHexColor(borderColor) {
+		borderColor = "#eab308"
+	}
+	borderBtn := qt6.NewQPushButton(dlg.QWidget)
+	updateColorButton(borderBtn, borderColor)
+	borderBtn.OnClicked(func() {
+		chosen := qt6.QColorDialog_GetColor3(qt6.NewQColor6(borderColor), dlg.QWidget, "Note Border Color")
+		if chosen.IsValid() {
+			borderColor = chosen.Name()
+			updateColorButton(borderBtn, borderColor)
+		}
+	})
+	layout.AddRow3("Border:", borderBtn.QWidget)
+
+	layerCombo := qt6.NewQComboBox(dlg.QWidget)
+	layerCombo.AddItem("Above Text")
+	layerCombo.AddItem("Behind Text")
+	if current.BehindText {
+		layerCombo.SetCurrentIndex(1)
+	}
+	layout.AddRow3("Layer:", layerCombo.QWidget)
+
+	deleted := false
+	buttons := qt6.NewQDialogButtonBox4(qt6.QDialogButtonBox__Ok | qt6.QDialogButtonBox__Cancel)
+	delBtn := buttons.AddButton2("Delete Note", qt6.QDialogButtonBox__DestructiveRole)
+	delBtn.OnClicked(func() {
+		deleted = true
+		dlg.Accept()
+	})
+	buttons.OnAccepted(dlg.Accept)
+	buttons.OnRejected(dlg.Reject)
+	layout.AddRowWithWidget(buttons.QWidget)
+
+	if dlg.Exec() != int(qt6.QDialog__Accepted) {
+		return current, false, false
+	}
+	if deleted {
+		return current, true, true
+	}
+
+	updated := current
+	updated.Text = textEdit.ToPlainText()
+	updated.FillColor = bgColor
+	updated.BorderColor = borderColor
+	updated.BehindText = layerCombo.CurrentIndex() == 1
+	return updated, false, true
+}

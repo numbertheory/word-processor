@@ -59,12 +59,12 @@ func (mw *MainWindow) insertDrawing(shape ShapeType) {
 
 	vpWidth := float64(tab.editor.Viewport().Width())
 	pageW := math.Min(vpWidth, InchesToPx(MaxPageWidthInches))
-	x := math.Max(20, (pageW-120)/2)
 	y := float64(tab.editor.VerticalScrollBar().Value()) + 80
 
 	mw.nextDrawingSeq++
 	id := fmt.Sprintf("drawing-%d", mw.nextDrawingSeq)
-	item := NewDrawingItem(id, shape, x, y)
+	item := NewDrawingItem(id, shape, 0, y)
+	item.X = math.Max(20, (pageW-item.Width)/2)
 	tab.drawings = append(tab.drawings, item)
 	tab.selectedDrawingID = item.ID
 	tab.editor.Document().SetModifiedWithBool(true)
@@ -129,6 +129,10 @@ func (mw *MainWindow) paintDrawingSelection(tab *documentTab) {
 	painter.SetPenWithPen(pen)
 	painter.DrawRect(qt6.NewQRectF4(x, y, w, h))
 
+	if item.Shape == ShapeNote {
+		return
+	}
+
 	// Draw 8 resize handles
 	solidPen := qt6.NewQPen3(selColor)
 	solidPen.SetWidth(1)
@@ -176,7 +180,7 @@ func (mw *MainWindow) findDrawingByID(tab *documentTab, id string) (*DrawingItem
 
 func (mw *MainWindow) hitTestHandle(tab *documentTab, px, py float64) resizeHandle {
 	item, _ := mw.findDrawingByID(tab, tab.selectedDrawingID)
-	if item == nil {
+	if item == nil || item.Shape == ShapeNote {
 		return handleNone
 	}
 	x, y, w, h := mw.drawingScreenRect(tab, *item)
@@ -243,13 +247,44 @@ func (mw *MainWindow) handleDrawingMousePress(tab *documentTab, e *qt6.QMouseEve
 	return false
 }
 
+func cursorForHandle(h resizeHandle) qt6.CursorShape {
+	switch h {
+	case handleNW, handleSE:
+		return qt6.SizeFDiagCursor
+	case handleNE, handleSW:
+		return qt6.SizeBDiagCursor
+	case handleN, handleS:
+		return qt6.SizeVerCursor
+	case handleE, handleW:
+		return qt6.SizeHorCursor
+	default:
+		return qt6.IBeamCursor
+	}
+}
+
+func (mw *MainWindow) updateHoverCursor(tab *documentTab, px, py float64) {
+	vp := tab.editor.Viewport()
+	if h := mw.hitTestHandle(tab, px, py); h != handleNone {
+		vp.SetCursor(qt6.NewQCursor2(cursorForHandle(h)))
+		return
+	}
+	if mw.hitTestDrawing(tab, px, py) >= 0 {
+		vp.SetCursor(qt6.NewQCursor2(qt6.SizeAllCursor))
+		return
+	}
+	vp.SetCursor(qt6.NewQCursor2(qt6.IBeamCursor))
+}
+
 func (mw *MainWindow) handleDrawingMouseMove(tab *documentTab, e *qt6.QMouseEvent) bool {
+	pos := e.Pos()
+	px, py := float64(pos.X()), float64(pos.Y())
+
 	if tab.dragMode == dragNone || tab.dragIndex < 0 || tab.dragIndex >= len(tab.drawings) {
+		mw.updateHoverCursor(tab, px, py)
 		return false
 	}
-	pos := e.Pos()
-	dx := float64(pos.X()) - tab.dragStartX
-	dy := float64(pos.Y()) - tab.dragStartY
+	dx := px - tab.dragStartX
+	dy := py - tab.dragStartY
 
 	item := &tab.drawings[tab.dragIndex]
 	orig := tab.dragOrig
@@ -291,6 +326,8 @@ func (mw *MainWindow) handleDrawingMouseRelease(tab *documentTab, e *qt6.QMouseE
 		tab.dragMode = dragNone
 		tab.dragHandle = handleNone
 		tab.dragIndex = -1
+		pos := e.Pos()
+		mw.updateHoverCursor(tab, float64(pos.X()), float64(pos.Y()))
 		return true
 	}
 	return false
@@ -327,6 +364,32 @@ func (mw *MainWindow) handleDrawingContextMenu(tab *documentTab, e *qt6.QContext
 
 	tab.selectedDrawingID = tab.drawings[idx].ID
 	tab.editor.Viewport().Update()
+
+	if tab.drawings[idx].Shape == ShapeNote {
+		updated, deleted, ok := showNoteDialog(mw.win.QWidget, tab.drawings[idx])
+		if ok {
+			if deleted {
+				tab.drawings = append(tab.drawings[:idx], tab.drawings[idx+1:]...)
+				tab.selectedDrawingID = ""
+			} else {
+				wasBehind := tab.drawings[idx].BehindText
+				tab.drawings[idx] = updated
+				if updated.BehindText != wasBehind {
+					item := tab.drawings[idx]
+					without := append(tab.drawings[:idx], tab.drawings[idx+1:]...)
+					if item.BehindText {
+						tab.drawings = append([]DrawingItem{item}, without...)
+					} else {
+						tab.drawings = append(without, item)
+					}
+				}
+			}
+			tab.editor.Document().SetModifiedWithBool(true)
+			tab.editor.Viewport().Update()
+		}
+		e.Accept()
+		return true
+	}
 
 	menu := qt6.NewQMenu(tab.editor.QWidget)
 
