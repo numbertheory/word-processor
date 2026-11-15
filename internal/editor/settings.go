@@ -63,7 +63,8 @@ func FindTheme(mode ThemeMode) (ThemeOption, bool) {
 
 // AppSettings holds persistent application preferences.
 type AppSettings struct {
-	Theme ThemeMode `json:"theme"`
+	Theme       ThemeMode `json:"theme"`
+	RecentFonts []string  `json:"recentFonts,omitempty"`
 }
 
 // DefaultAppSettings returns the default settings (obey system theme).

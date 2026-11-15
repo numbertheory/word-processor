@@ -1,6 +1,8 @@
 package editor
 
 import (
+	"strings"
+
 	"github.com/mappu/miqt/qt6"
 )
 
@@ -9,8 +11,11 @@ import (
 type formatControls struct {
 	editor *qt6.QTextEdit
 
-	fontCombo *qt6.QFontComboBox
-	sizeSpin  *qt6.QSpinBox
+	fontCombo       *qt6.QComboBox
+	installedFonts  []string
+	recentFonts     []string
+	onRecentChanged func([]string)
+	sizeSpin        *qt6.QSpinBox
 
 	boldAction      *qt6.QAction
 	italicAction    *qt6.QAction
@@ -32,19 +37,43 @@ type formatControls struct {
 	syncing bool
 }
 
-func newFormatControls(parent *qt6.QMainWindow) *formatControls {
-	fc := &formatControls{}
+func newFormatControls(parent *qt6.QMainWindow, recentFonts []string, onRecentChanged func([]string)) *formatControls {
+	fc := &formatControls{
+		installedFonts:  qt6.QFontDatabase_Families(),
+		recentFonts:     append([]string(nil), recentFonts...),
+		onRecentChanged: onRecentChanged,
+	}
 
-	fc.fontCombo = qt6.NewQFontComboBox(parent.QWidget)
-	fc.fontCombo.SetToolTip("Font Family")
-	fc.fontCombo.SetMaximumWidth(200)
-	fc.fontCombo.OnCurrentFontChanged(func(font *qt6.QFont) {
-		if fc.syncing {
+	fc.fontCombo = qt6.NewQComboBox(parent.QWidget)
+	fc.fontCombo.SetEditable(true)
+	fc.fontCombo.SetInsertPolicy(qt6.QComboBox__NoInsert)
+	fc.fontCombo.SetToolTip("Font Family (type to filter)")
+	fc.fontCombo.SetMinimumWidth(180)
+	fc.fontCombo.SetMaximumWidth(230)
+	if comp := fc.fontCombo.Completer(); comp != nil {
+		comp.SetFilterMode(qt6.MatchContains)
+		comp.SetCaseSensitivity(qt6.CaseInsensitive)
+		comp.SetCompletionMode(qt6.QCompleter__PopupCompletion)
+	}
+	fc.rebuildFontList("Sans Serif")
+
+	fc.fontCombo.OnTextActivated(func(family string) {
+		if fc.syncing || fc.editor == nil {
+			return
+		}
+		family = strings.TrimSpace(family)
+		if family == "" {
 			return
 		}
 		fmt := qt6.NewQTextCharFormat()
-		fmt.SetFontFamilies([]string{font.Family()})
+		fmt.SetFontFamilies([]string{family})
 		fc.mergeCharFormat(fmt)
+
+		fc.recentFonts = AddRecentFont(fc.recentFonts, family, maxRecentFonts)
+		fc.rebuildFontList(family)
+		if fc.onRecentChanged != nil {
+			fc.onRecentChanged(append([]string(nil), fc.recentFonts...))
+		}
 		fc.editor.SetFocus()
 	})
 
@@ -272,6 +301,35 @@ func (fc *formatControls) populateToolbar(tb *qt6.QToolBar) {
 	tb.AddAction(fc.numberedListAction)
 }
 
+func (fc *formatControls) rebuildFontList(activeFamily string) {
+	prevSync := fc.syncing
+	fc.syncing = true
+	defer func() { fc.syncing = prevSync }()
+
+	fc.fontCombo.Clear()
+	recentOut, classicOut, restOut := BuildFontSections(fc.installedFonts, fc.recentFonts)
+
+	addSection := func(items []string, addSepAfter bool) {
+		if len(items) == 0 {
+			return
+		}
+		for _, f := range items {
+			fc.fontCombo.AddItem(f)
+		}
+		if addSepAfter {
+			fc.fontCombo.InsertSeparator(fc.fontCombo.Count())
+		}
+	}
+
+	addSection(recentOut, len(classicOut) > 0 || len(restOut) > 0)
+	addSection(classicOut, len(restOut) > 0)
+	addSection(restOut, false)
+
+	if activeFamily != "" {
+		fc.fontCombo.SetCurrentText(activeFamily)
+	}
+}
+
 func (fc *formatControls) setEditor(editor *qt6.QTextEdit) {
 	fc.editor = editor
 }
@@ -286,7 +344,7 @@ func (fc *formatControls) syncFromFormat(fmt *qt6.QTextCharFormat) {
 	fc.strikeAction.SetChecked(fmt.FontStrikeOut())
 
 	if family := fmt.Font().Family(); family != "" {
-		fc.fontCombo.SetCurrentFont(qt6.NewQFont2(family))
+		fc.fontCombo.SetCurrentText(family)
 	}
 	if size := int(fmt.FontPointSize()); size > 0 {
 		fc.sizeSpin.SetValue(size)

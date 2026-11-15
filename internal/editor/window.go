@@ -72,10 +72,15 @@ func NewMainWindow() *MainWindow {
 		win:          win,
 		tabs:         tabs,
 		tabByWidget:  make(map[unsafe.Pointer]*documentTab),
-		format:       newFormatControls(win),
 		settings:     settings,
 		settingsPath: settingsPath,
 	}
+	mw.format = newFormatControls(win, settings.RecentFonts, func(recent []string) {
+		mw.settings.RecentFonts = recent
+		if mw.settingsPath != "" {
+			_ = SaveSettings(mw.settingsPath, mw.settings)
+		}
+	})
 
 	mw.setupToolbars()
 	mw.setupStatusBar()
@@ -610,6 +615,7 @@ func (mw *MainWindow) openSettings() {
 	if !ok {
 		return
 	}
+	updated.RecentFonts = mw.settings.RecentFonts
 	mw.settings = updated
 	mw.applyEditorThemeAll()
 	if mw.settingsPath != "" {

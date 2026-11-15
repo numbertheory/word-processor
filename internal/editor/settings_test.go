@@ -3,6 +3,7 @@ package editor
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -12,14 +13,14 @@ func TestLoadSettingsMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSettings missing file returned error: %v", err)
 	}
-	if got != DefaultAppSettings() {
+	if !reflect.DeepEqual(got, DefaultAppSettings()) {
 		t.Errorf("got %+v, want %+v", got, DefaultAppSettings())
 	}
 }
 
 func TestSaveAndLoadSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "word-processor", "settings.json")
-	want := AppSettings{Theme: ThemeLight}
+	want := AppSettings{Theme: ThemeLight, RecentFonts: []string{"Noto Sans", "Georgia"}}
 
 	if err := SaveSettings(path, want); err != nil {
 		t.Fatalf("SaveSettings failed: %v", err)
@@ -29,7 +30,7 @@ func TestSaveAndLoadSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadSettings failed: %v", err)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("LoadSettings = %+v, want %+v", got, want)
 	}
 }
@@ -59,7 +60,7 @@ func TestSaveAndLoadAllThemes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("LoadSettings(%q) failed: %v", opt.Mode, err)
 		}
-		if got != want {
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("theme %q round-trip: got %+v, want %+v", opt.Mode, got, want)
 		}
 	}
