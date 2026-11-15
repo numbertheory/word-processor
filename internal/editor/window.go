@@ -418,8 +418,8 @@ func (mw *MainWindow) openFile() {
 		mw.editor.SetPlainText(content)
 		mw.margins = DefaultPageMargins()
 	default:
-		mw.editor.SetHtml(content)
 		margins, _ := ExtractHTMLMargins(content)
+		mw.editor.SetHtml(StripHTMLPageStyle(content))
 		mw.margins = margins
 	}
 	mw.applyMargins()

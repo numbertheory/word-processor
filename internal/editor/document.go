@@ -51,22 +51,39 @@ func InchesToPx(inches float64) float64 {
 }
 
 var marginMetaRe = regexp.MustCompile(`(?i)<meta\s+name=["']word-processor-margins["']\s+content=["']([^"']*)["']\s*/?>`)
+var pageStyleRe = regexp.MustCompile(`(?is)<style\s+id=["']word-processor-page-style["'][^>]*>.*?</style>\s*`)
 var headOpenRe = regexp.MustCompile(`(?i)<head[^>]*>`)
 
-// InjectHTMLMargins embeds or updates the word-processor-margins meta tag in an HTML document.
+// InjectHTMLMargins embeds or updates the word-processor-margins meta tag
+// and responsive centered-page CSS for browsers in an HTML document.
 func InjectHTMLMargins(html string, m PageMargins) string {
 	metaTag := fmt.Sprintf(
 		`<meta name="word-processor-margins" content="%.2f,%.2f,%.2f,%.2f" />`,
 		m.Top, m.Right, m.Bottom, m.Left,
 	)
+	pageStyle := fmt.Sprintf(
+		`<style id="word-processor-page-style">body { max-width: 10.2in; margin: 0 auto !important; padding: %.2fin %.2fin %.2fin %.2fin !important; box-sizing: border-box; } table[style*="-qt-table-type: root"] { margin: 0 !important; width: 100%%; }</style>`,
+		m.Top, m.Right, m.Bottom, m.Left,
+	)
 
-	if marginMetaRe.MatchString(html) {
-		return marginMetaRe.ReplaceAllString(html, metaTag)
+	cleaned := pageStyleRe.ReplaceAllString(html, "")
+	if marginMetaRe.MatchString(cleaned) {
+		cleaned = marginMetaRe.ReplaceAllString(cleaned, metaTag)
+		if loc := headOpenRe.FindStringIndex(cleaned); loc != nil {
+			return cleaned[:loc[1]] + "\n" + pageStyle + cleaned[loc[1]:]
+		}
+		return pageStyle + "\n" + cleaned
 	}
-	if loc := headOpenRe.FindStringIndex(html); loc != nil {
-		return html[:loc[1]] + "\n" + metaTag + html[loc[1]:]
+	if loc := headOpenRe.FindStringIndex(cleaned); loc != nil {
+		return cleaned[:loc[1]] + "\n" + metaTag + "\n" + pageStyle + cleaned[loc[1]:]
 	}
-	return fmt.Sprintf("<head>\n%s\n</head>\n%s", metaTag, html)
+	return fmt.Sprintf("<head>\n%s\n%s\n</head>\n%s", metaTag, pageStyle, cleaned)
+}
+
+// StripHTMLPageStyle removes the browser-only page centering style block so
+// QTextEdit does not double-apply margins when reopening an HTML file.
+func StripHTMLPageStyle(html string) string {
+	return pageStyleRe.ReplaceAllString(html, "")
 }
 
 // ExtractHTMLMargins parses the word-processor-margins meta tag from HTML, if present.

@@ -126,6 +126,13 @@ func TestInjectAndExtractHTMLMargins(t *testing.T) {
 	if def, ok := ExtractHTMLMargins(`<meta name="word-processor-margins" content="bad" />`); ok || def != DefaultPageMargins() {
 		t.Errorf("malformed meta = %+v (ok=%v), want default with ok=false", def, ok)
 	}
+
+	// Browser page style should be injected and cleanly stripped when reopening.
+	if stripped := StripHTMLPageStyle(withUpdated); stripped == withUpdated {
+		t.Errorf("StripHTMLPageStyle did not remove style block from:\n%s", withUpdated)
+	} else if _, ok := ExtractHTMLMargins(stripped); !ok {
+		t.Errorf("StripHTMLPageStyle unexpectedly removed margin meta tag")
+	}
 }
 
 func TestInchesToPx(t *testing.T) {
