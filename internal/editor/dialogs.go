@@ -125,6 +125,10 @@ func showSettingsDialog(parent *qt6.QWidget, current AppSettings) (AppSettings, 
 
 	layout.AddRow3("Editor Theme:", themeCombo.QWidget)
 
+	spellCheck := qt6.NewQCheckBox3("Enable English Spellcheck")
+	spellCheck.SetChecked(current.Spellcheck)
+	layout.AddRow3("Spellcheck:", spellCheck.QWidget)
+
 	buttons := qt6.NewQDialogButtonBox4(qt6.QDialogButtonBox__Ok | qt6.QDialogButtonBox__Cancel)
 	buttons.OnAccepted(dlg.Accept)
 	buttons.OnRejected(dlg.Reject)
@@ -140,7 +144,7 @@ func showSettingsDialog(parent *qt6.QWidget, current AppSettings) (AppSettings, 
 		mode = themes[idx].Mode
 	}
 
-	return AppSettings{Theme: mode}, true
+	return AppSettings{Theme: mode, Spellcheck: spellCheck.IsChecked()}, true
 }
 
 func showRotationDialog(parent *qt6.QWidget, currentDeg float64, onPreview func(float64)) (float64, bool) {

@@ -20,7 +20,7 @@ func TestLoadSettingsMissingFile(t *testing.T) {
 
 func TestSaveAndLoadSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "word-processor", "settings.json")
-	want := AppSettings{Theme: ThemeLight, RecentFonts: []string{"Noto Sans", "Georgia"}}
+	want := AppSettings{Theme: ThemeLight, Spellcheck: true, RecentFonts: []string{"Noto Sans", "Georgia"}}
 
 	if err := SaveSettings(path, want); err != nil {
 		t.Fatalf("SaveSettings failed: %v", err)
@@ -52,7 +52,7 @@ func TestLoadSettingsInvalidThemeFallsBackToSystem(t *testing.T) {
 func TestSaveAndLoadAllThemes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	for _, opt := range AvailableThemes() {
-		want := AppSettings{Theme: opt.Mode}
+		want := AppSettings{Theme: opt.Mode, Spellcheck: true}
 		if err := SaveSettings(path, want); err != nil {
 			t.Fatalf("SaveSettings(%q) failed: %v", opt.Mode, err)
 		}

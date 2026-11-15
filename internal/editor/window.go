@@ -29,6 +29,8 @@ type documentTab struct {
 	dragStartX float64
 	dragStartY float64
 	dragOrig   DrawingItem
+
+	spellTimer *qt6.QTimer
 }
 
 // MainWindow wraps the primary Qt6 application window and tabbed rich-text editor.
@@ -48,6 +50,7 @@ type MainWindow struct {
 	settings       AppSettings
 	settingsPath   string
 	nextDrawingSeq int
+	spell          *SpellChecker
 }
 
 // NewMainWindow constructs and wires the tabbed rich-text editor window.
@@ -70,12 +73,16 @@ func NewMainWindow() *MainWindow {
 		}
 	}
 
+	dictPath, _ := DefaultCustomDictionaryPath()
+	spell := NewSpellChecker(dictPath)
+
 	mw := &MainWindow{
 		win:          win,
 		tabs:         tabs,
 		tabByWidget:  make(map[unsafe.Pointer]*documentTab),
 		settings:     settings,
 		settingsPath: settingsPath,
+		spell:        spell,
 	}
 	mw.format = newFormatControls(win, settings.RecentFonts, func(recent []string) {
 		mw.settings.RecentFonts = recent
@@ -88,6 +95,15 @@ func NewMainWindow() *MainWindow {
 	mw.setupStatusBar()
 	mw.connectWindowSignals()
 	mw.newFile()
+
+	go func() {
+		spell.LoadSystemEnglishDictionary()
+	}()
+	// Re-run spellcheck shortly after startup once the system dictionary finishes loading.
+	initSpellTimer := qt6.NewQTimer2(win.QObject)
+	initSpellTimer.SetSingleShot(true)
+	initSpellTimer.OnTimeout(mw.runSpellCheckAll)
+	initSpellTimer.Start(450)
 
 	return mw
 }
@@ -379,14 +395,23 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 	ed.SetFont(qt6.NewQFont6("Sans Serif", 12))
 	ed.Viewport().SetAutoFillBackground(false)
 
+	spellTimer := qt6.NewQTimer2(ed.QObject)
+	spellTimer.SetSingleShot(true)
+	spellTimer.SetInterval(250)
+
 	tab := &documentTab{
-		editor:    ed,
-		filePath:  CanonicalPath(filePath),
-		pageSetup: pageSetup,
-		drawings:  drawings,
-		dragIndex: -1,
+		editor:     ed,
+		filePath:   CanonicalPath(filePath),
+		pageSetup:  pageSetup,
+		drawings:   drawings,
+		dragIndex:  -1,
+		spellTimer: spellTimer,
 	}
 	mw.tabByWidget[ed.QWidget.UnsafePointer()] = tab
+
+	spellTimer.OnTimeout(func() {
+		mw.runSpellCheckTab(tab)
+	})
 
 	mw.applyThemeToTab(tab)
 	if loadContent != nil {
@@ -394,11 +419,13 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 	}
 	mw.applyMarginsToTab(tab)
 	ed.Document().SetModifiedWithBool(false)
+	mw.runSpellCheckTab(tab)
 
 	ed.OnTextChanged(func() {
 		if mw.currentTab() == tab {
 			mw.updateStatusBar()
 		}
+		tab.spellTimer.Start(250)
 	})
 	ed.OnCursorPositionChanged(func() {
 		if mw.currentTab() == tab {
@@ -461,6 +488,9 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 	})
 	ed.OnContextMenuEvent(func(super func(e *qt6.QContextMenuEvent), e *qt6.QContextMenuEvent) {
 		if mw.handleDrawingContextMenu(tab, e) {
+			return
+		}
+		if mw.showSpellContextMenu(tab, e) {
 			return
 		}
 		super(e)
@@ -620,6 +650,7 @@ func (mw *MainWindow) openSettings() {
 	updated.RecentFonts = mw.settings.RecentFonts
 	mw.settings = updated
 	mw.applyEditorThemeAll()
+	mw.runSpellCheckAll()
 	if mw.settingsPath != "" {
 		if err := SaveSettings(mw.settingsPath, mw.settings); err != nil {
 			qt6.QMessageBox_Warning(mw.win.QWidget, "Settings Error", fmt.Sprintf("Could not save settings:\n%v", err))
@@ -807,5 +838,109 @@ func (mw *MainWindow) writeTabToPath(tab *documentTab, path string) bool {
 	if mw.currentTab() == tab {
 		mw.updateWindowTitle()
 	}
+	return true
+}
+
+func (mw *MainWindow) runSpellCheckTab(tab *documentTab) {
+	if tab == nil {
+		return
+	}
+	if !mw.settings.Spellcheck || mw.spell == nil {
+		tab.editor.SetExtraSelections(nil)
+		return
+	}
+
+	text := tab.editor.ToPlainText()
+	spans := TokenizeWords(text)
+	if len(spans) == 0 {
+		tab.editor.SetExtraSelections(nil)
+		return
+	}
+
+	errFmt := qt6.NewQTextCharFormat()
+	errFmt.SetUnderlineStyle(qt6.QTextCharFormat__SpellCheckUnderline)
+	errFmt.SetUnderlineColor(qt6.NewQColor6("#ef4444"))
+
+	var selections []qt6.QTextEdit__ExtraSelection
+	for _, sp := range spans {
+		if mw.spell.IsCorrect(sp.Word) {
+			continue
+		}
+		cursor := tab.editor.TextCursor()
+		cursor.SetPosition(sp.Start)
+		cursor.SetPosition2(sp.End, qt6.QTextCursor__KeepAnchor)
+
+		sel := qt6.NewQTextEdit__ExtraSelection2()
+		sel.SetCursor(*cursor)
+		sel.SetFormat(*errFmt)
+		selections = append(selections, *sel)
+	}
+
+	tab.editor.SetExtraSelections(selections)
+}
+
+func (mw *MainWindow) runSpellCheckAll() {
+	for i := 0; i < mw.tabs.Count(); i++ {
+		if tab := mw.tabAt(i); tab != nil {
+			mw.runSpellCheckTab(tab)
+		}
+	}
+}
+
+func (mw *MainWindow) showSpellContextMenu(tab *documentTab, e *qt6.QContextMenuEvent) bool {
+	if !mw.settings.Spellcheck || mw.spell == nil {
+		return false
+	}
+
+	cursor := tab.editor.CursorForPosition(e.Pos())
+	cursor.Select(qt6.QTextCursor__WordUnderCursor)
+	word := cursor.SelectedText()
+	if word == "" || mw.spell.IsCorrect(word) {
+		return false
+	}
+
+	menu := tab.editor.CreateStandardContextMenuWithPosition(e.Pos())
+	var before *qt6.QAction
+	if acts := menu.Actions(); len(acts) > 0 {
+		before = acts[0]
+	}
+
+	suggestions := mw.spell.Suggest(word, 5)
+	if len(suggestions) == 0 {
+		noSug := qt6.NewQAction5("(No suggestions)", menu.QObject)
+		noSug.SetEnabled(false)
+		menu.InsertAction(before, noSug)
+	} else {
+		for _, sug := range suggestions {
+			replacement := sug
+			act := qt6.NewQAction5(replacement, menu.QObject)
+			act.OnTriggered(func() {
+				cursor.InsertText(replacement)
+				mw.runSpellCheckTab(tab)
+			})
+			menu.InsertAction(before, act)
+		}
+	}
+
+	menu.InsertSeparator(before)
+
+	addAct := qt6.NewQAction5("Add to Dictionary", menu.QObject)
+	addAct.OnTriggered(func() {
+		_ = mw.spell.AddCustomWord(word)
+		mw.runSpellCheckAll()
+	})
+	menu.InsertAction(before, addAct)
+
+	ignoreAct := qt6.NewQAction5("Ignore All", menu.QObject)
+	ignoreAct.OnTriggered(func() {
+		mw.spell.IgnoreWord(word)
+		mw.runSpellCheckAll()
+	})
+	menu.InsertAction(before, ignoreAct)
+
+	menu.InsertSeparator(before)
+
+	menu.ExecWithPos(e.GlobalPos())
+	e.Accept()
 	return true
 }

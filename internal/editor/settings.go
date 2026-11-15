@@ -64,12 +64,13 @@ func FindTheme(mode ThemeMode) (ThemeOption, bool) {
 // AppSettings holds persistent application preferences.
 type AppSettings struct {
 	Theme       ThemeMode `json:"theme"`
+	Spellcheck  bool      `json:"spellcheck"`
 	RecentFonts []string  `json:"recentFonts,omitempty"`
 }
 
-// DefaultAppSettings returns the default settings (obey system theme).
+// DefaultAppSettings returns the default settings (obey system theme, spellcheck enabled).
 func DefaultAppSettings() AppSettings {
-	return AppSettings{Theme: ThemeSystem}
+	return AppSettings{Theme: ThemeSystem, Spellcheck: true}
 }
 
 // DefaultSettingsPath returns the platform-appropriate settings file path
@@ -93,7 +94,7 @@ func LoadSettings(path string) (AppSettings, error) {
 		return defaults, err
 	}
 
-	var s AppSettings
+	s := DefaultAppSettings()
 	if err := json.Unmarshal(data, &s); err != nil {
 		return defaults, err
 	}
