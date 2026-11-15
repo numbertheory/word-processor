@@ -1,5 +1,7 @@
 APP_NAME := word-processor
 INSTALL_DIR := $(HOME)/.local/bin
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -ldflags "-X word-processor/internal/editor.AppVersion=$(VERSION)"
 
 ifeq ($(OS),Windows_NT)
 	BIN := $(APP_NAME).exe
@@ -12,7 +14,7 @@ endif
 all: build
 
 build:
-	go build -o $(BIN) .
+	go build $(LDFLAGS) -o $(BIN) .
 
 run: build
 	./$(BIN)

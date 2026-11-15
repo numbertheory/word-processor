@@ -9,10 +9,12 @@ import (
 
 const (
 	appTitle       = "Word Processor"
-	AppVersion     = "0.1.0"
 	fileFilter     = "Rich Text (*.html *.htm);;Markdown (*.md *.markdown);;Plain Text (*.txt);;All Files (*)"
 	defaultOpenDir = ""
 )
+
+// AppVersion is overridden at link time via -ldflags "-X word-processor/internal/editor.AppVersion=...".
+var AppVersion = "dev"
 
 type documentTab struct {
 	editor            *qt6.QTextEdit
