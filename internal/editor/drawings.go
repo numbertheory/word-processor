@@ -67,8 +67,8 @@ func NewNoteItem(id string, x, y float64) DrawingItem {
 		Y:           y,
 		Width:       190,
 		Height:      190,
-		FillColor:   "#fef08a",
-		BorderColor: "#eab308",
+		FillColor:   "#55ffff",
+		BorderColor: "#00007f",
 		Background:  "transparent",
 		BehindText:  false,
 	}
@@ -177,8 +177,8 @@ func renderNoteSVG(b *strings.Builder, w, h, pad float64, fill, stroke string, s
 	)
 
 	// Stepped flat drop shadow (stronger around the lifted lower-left corner).
-	fmt.Fprintf(b, `<path d="%s" transform="translate(5,7)" fill="rgba(0,0,0,0.11)" />`, cardPath)
-	fmt.Fprintf(b, `<path d="%s" transform="translate(2,4)" fill="rgba(0,0,0,0.16)" />`, cardPath)
+	fmt.Fprintf(b, `<path d="%s" transform="translate(5,7)" fill="#000000" fill-opacity="0.11" />`, cardPath)
+	fmt.Fprintf(b, `<path d="%s" transform="translate(2,4)" fill="#000000" fill-opacity="0.16" />`, cardPath)
 
 	// Main note card body.
 	fmt.Fprintf(b, `<path d="%s" fill="%s" stroke="%s" stroke-width="%.1f" stroke-linejoin="round" />`,
@@ -192,7 +192,7 @@ func renderNoteSVG(b *strings.Builder, w, h, pad float64, fill, stroke string, s
 		x0+fold, y1,
 	)
 	fmt.Fprintf(b, `<path d="%s" fill="%s" />`, flapPath, fill)
-	fmt.Fprintf(b, `<path d="%s" fill="rgba(0,0,0,0.15)" stroke="%s" stroke-width="%.1f" stroke-linejoin="round" />`,
+	fmt.Fprintf(b, `<path d="%s" fill="#000000" fill-opacity="0.15" stroke="%s" stroke-width="%.1f" stroke-linejoin="round" />`,
 		flapPath, stroke, math.Max(strokeW-0.5, 1.0))
 
 	if strings.TrimSpace(text) == "" {

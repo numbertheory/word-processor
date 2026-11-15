@@ -222,7 +222,7 @@ func showNoteDialog(parent *qt6.QWidget, current DrawingItem) (DrawingItem, bool
 
 	bgColor := current.FillColor
 	if !IsValidHexColor(bgColor) {
-		bgColor = "#fef08a"
+		bgColor = "#55ffff"
 	}
 	bgBtn := qt6.NewQPushButton(dlg.QWidget)
 	updateColorButton(bgBtn, bgColor)
@@ -237,7 +237,7 @@ func showNoteDialog(parent *qt6.QWidget, current DrawingItem) (DrawingItem, bool
 
 	borderColor := current.BorderColor
 	if !IsValidHexColor(borderColor) {
-		borderColor = "#eab308"
+		borderColor = "#00007f"
 	}
 	borderBtn := qt6.NewQPushButton(dlg.QWidget)
 	updateColorButton(borderBtn, borderColor)
