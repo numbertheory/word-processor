@@ -472,10 +472,10 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 	})
 	ed.OnPaintEvent(func(super func(e *qt6.QPaintEvent), e *qt6.QPaintEvent) {
 		mw.paintViewportBackground(tab)
+		mw.paintMarginGuides(tab)
 		mw.paintDrawings(tab, true)
 		super(e)
 		mw.paintDrawings(tab, false)
-		mw.paintMarginGuides(tab)
 		mw.paintDrawingSelection(tab)
 	})
 	ed.OnMousePressEvent(func(super func(e *qt6.QMouseEvent), e *qt6.QMouseEvent) {
