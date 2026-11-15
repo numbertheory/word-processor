@@ -15,9 +15,18 @@ const (
 )
 
 type documentTab struct {
-	editor    *qt6.QTextEdit
-	filePath  string
-	pageSetup PageSetup
+	editor            *qt6.QTextEdit
+	filePath          string
+	pageSetup         PageSetup
+	drawings          []DrawingItem
+	selectedDrawingID string
+
+	dragMode   dragMode
+	dragHandle resizeHandle
+	dragIndex  int
+	dragStartX float64
+	dragStartY float64
+	dragOrig   DrawingItem
 }
 
 // MainWindow wraps the primary Qt6 application window and tabbed rich-text editor.
@@ -34,8 +43,9 @@ type MainWindow struct {
 	cutAct  *qt6.QAction
 	copyAct *qt6.QAction
 
-	settings     AppSettings
-	settingsPath string
+	settings       AppSettings
+	settingsPath   string
+	nextDrawingSeq int
 }
 
 // NewMainWindow constructs and wires the tabbed rich-text editor window.
@@ -265,6 +275,35 @@ func (mw *MainWindow) setupToolbars() {
 	formatTB := mw.win.AddToolBarWithTitle("Formatting")
 	formatTB.SetMovable(false)
 	mw.format.populateToolbar(formatTB)
+
+	// Draw... dropdown button
+	formatTB.AddSeparator()
+	drawBtn := qt6.NewQToolButton(formatTB.QWidget)
+	drawBtn.SetText("Draw...")
+	drawBtn.SetToolTip("Insert SVG Shape")
+	drawBtn.SetPopupMode(qt6.QToolButton__InstantPopup)
+
+	drawMenu := qt6.NewQMenu(drawBtn.QWidget)
+	shapes := []struct {
+		label string
+		shape ShapeType
+	}{
+		{"Star", ShapeStar},
+		{"Circle", ShapeCircle},
+		{"Rectangle", ShapeRectangle},
+		{"Triangle", ShapeTriangle},
+		{"Arrow", ShapeArrow},
+	}
+	for _, s := range shapes {
+		shapeType := s.shape
+		act := qt6.NewQAction5(s.label, drawMenu.QObject)
+		act.OnTriggered(func() {
+			mw.insertDrawing(shapeType)
+		})
+		drawMenu.AddAction(act)
+	}
+	drawBtn.SetMenu(drawMenu)
+	formatTB.AddWidget(drawBtn.QWidget)
 }
 
 func (mw *MainWindow) setupStatusBar() {
@@ -327,15 +366,18 @@ func (mw *MainWindow) findTabByPath(path string) (int, *documentTab) {
 	return -1, nil
 }
 
-func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit), pageSetup PageSetup) *documentTab {
+func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit), pageSetup PageSetup, drawings []DrawingItem) *documentTab {
 	ed := qt6.NewQTextEdit(mw.tabs.QWidget)
 	ed.SetAcceptRichText(true)
 	ed.SetFont(qt6.NewQFont6("Sans Serif", 12))
+	ed.Viewport().SetAutoFillBackground(false)
 
 	tab := &documentTab{
 		editor:    ed,
 		filePath:  CanonicalPath(filePath),
 		pageSetup: pageSetup,
+		drawings:  drawings,
+		dragIndex: -1,
 	}
 	mw.tabByWidget[ed.QWidget.UnsafePointer()] = tab
 
@@ -385,8 +427,42 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 		}
 	})
 	ed.OnPaintEvent(func(super func(e *qt6.QPaintEvent), e *qt6.QPaintEvent) {
+		mw.paintViewportBackground(tab)
+		mw.paintDrawings(tab, true)
 		super(e)
+		mw.paintDrawings(tab, false)
 		mw.paintMarginGuides(tab)
+		mw.paintDrawingSelection(tab)
+	})
+	ed.OnMousePressEvent(func(super func(e *qt6.QMouseEvent), e *qt6.QMouseEvent) {
+		if mw.handleDrawingMousePress(tab, e) {
+			return
+		}
+		super(e)
+	})
+	ed.OnMouseMoveEvent(func(super func(e *qt6.QMouseEvent), e *qt6.QMouseEvent) {
+		if mw.handleDrawingMouseMove(tab, e) {
+			return
+		}
+		super(e)
+	})
+	ed.OnMouseReleaseEvent(func(super func(e *qt6.QMouseEvent), e *qt6.QMouseEvent) {
+		if mw.handleDrawingMouseRelease(tab, e) {
+			return
+		}
+		super(e)
+	})
+	ed.OnContextMenuEvent(func(super func(e *qt6.QContextMenuEvent), e *qt6.QContextMenuEvent) {
+		if mw.handleDrawingContextMenu(tab, e) {
+			return
+		}
+		super(e)
+	})
+	ed.OnKeyPressEvent(func(super func(e *qt6.QKeyEvent), e *qt6.QKeyEvent) {
+		if mw.handleDrawingKeyPress(tab, e) {
+			return
+		}
+		super(e)
 	})
 	ed.OnResizeEvent(func(super func(e *qt6.QResizeEvent), e *qt6.QResizeEvent) {
 		super(e)
@@ -605,32 +681,23 @@ func (mw *MainWindow) paintMarginGuides(tab *documentTab) {
 
 func (mw *MainWindow) applyThemeToTab(tab *documentTab) {
 	opt, _ := FindTheme(mw.settings.Theme)
-	bg := opt.Background
-	if IsValidHexColor(tab.pageSetup.BackgroundColor) {
-		bg = tab.pageSetup.BackgroundColor
-	}
 	fg := opt.Foreground
 	if IsValidHexColor(tab.pageSetup.TextColor) {
 		fg = tab.pageSetup.TextColor
 	}
 
+	// Keep QTextEdit background transparent so paintViewportBackground + behind-text SVGs
+	// render cleanly underneath the document text.
 	if opt.Mode == ThemeSystem {
-		rules := ""
-		if bg != "" {
-			rules += fmt.Sprintf(" background-color: %s;", bg)
-		}
 		if fg != "" {
-			rules += fmt.Sprintf(" color: %s;", fg)
-		}
-		if rules != "" {
-			tab.editor.SetStyleSheet(fmt.Sprintf("QTextEdit {%s }", rules))
+			tab.editor.SetStyleSheet(fmt.Sprintf("QTextEdit { background-color: transparent; color: %s; }", fg))
 		} else {
-			tab.editor.SetStyleSheet("")
+			tab.editor.SetStyleSheet("QTextEdit { background-color: transparent; }")
 		}
 	} else {
 		tab.editor.SetStyleSheet(fmt.Sprintf(
-			"QTextEdit { background-color: %s; color: %s; selection-background-color: %s; selection-color: %s; }",
-			bg, fg, opt.SelectionBg, opt.SelectionFg,
+			"QTextEdit { background-color: transparent; color: %s; selection-background-color: %s; selection-color: %s; }",
+			fg, opt.SelectionBg, opt.SelectionFg,
 		))
 	}
 	tab.editor.Viewport().Update()
@@ -645,7 +712,7 @@ func (mw *MainWindow) applyEditorThemeAll() {
 }
 
 func (mw *MainWindow) newFile() {
-	mw.createTab("", nil, DefaultPageSetup())
+	mw.createTab("", nil, DefaultPageSetup(), nil)
 }
 
 func (mw *MainWindow) openFile() {
@@ -667,6 +734,7 @@ func (mw *MainWindow) openFile() {
 	}
 
 	pageSetup := DefaultPageSetup()
+	var drawings []DrawingItem
 	format := DetectFormat(path)
 	var loader func(*qt6.QTextEdit)
 
@@ -677,11 +745,12 @@ func (mw *MainWindow) openFile() {
 		loader = func(ed *qt6.QTextEdit) { ed.SetPlainText(content) }
 	default:
 		pageSetup = ExtractHTMLPageSetup(content)
-		cleanHTML := StripHTMLPageStyle(content)
+		drawings = ExtractHTMLDrawings(content)
+		cleanHTML := StripHTMLDrawings(StripHTMLPageStyle(content))
 		loader = func(ed *qt6.QTextEdit) { ed.SetHtml(cleanHTML) }
 	}
 
-	mw.createTab(path, loader, pageSetup)
+	mw.createTab(path, loader, pageSetup, drawings)
 }
 
 func (mw *MainWindow) saveCurrentTab() bool {
@@ -715,7 +784,8 @@ func (mw *MainWindow) writeTabToPath(tab *documentTab, path string) bool {
 	case FormatPlainText:
 		content = tab.editor.ToPlainText()
 	default:
-		content = InjectHTMLPageSetup(tab.editor.ToHtml(), tab.pageSetup)
+		htmlWithSetup := InjectHTMLPageSetup(tab.editor.ToHtml(), tab.pageSetup)
+		content = InjectHTMLDrawings(htmlWithSetup, tab.drawings)
 	}
 
 	if err := WriteDocumentFile(path, content); err != nil {
