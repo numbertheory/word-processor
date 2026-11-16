@@ -3,6 +3,7 @@ package editor
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/mappu/miqt/qt6"
 	"github.com/mappu/miqt/qt6/svg"
@@ -493,6 +494,171 @@ func (mw *MainWindow) handleDrawingContextMenu(tab *documentTab, e *qt6.QContext
 	menu.AddAction(delAct)
 
 	menu.ExecWithPos(e.GlobalPos())
+	e.Accept()
+	return true
+}
+
+func (mw *MainWindow) registerDropCapResource(tab *documentTab, item DropCapItem) {
+	w := int(math.Ceil(math.Max(item.Width, 24)))
+	h := int(math.Ceil(math.Max(item.Height, 24)))
+	img := qt6.NewQImage3(w, h, qt6.QImage__Format_ARGB32_Premultiplied)
+	img.FillWithColor(qt6.NewQColor2(qt6.Transparent))
+
+	painter := qt6.NewQPainter2(img.QPaintDevice)
+	renderer := svg.NewQSvgRenderer3([]byte(RenderDropCapSVG(item)))
+	renderer.Render2(painter, qt6.NewQRectF4(0, 0, float64(w), float64(h)))
+	painter.End()
+	renderer.Delete()
+
+	url := qt6.NewQUrl3("dropcap://" + item.ID)
+	tab.editor.Document().AddResource(int(qt6.QTextDocument__ImageResource), url, img.ToQVariant())
+}
+
+func (mw *MainWindow) insertDropCap() {
+	tab := mw.currentTab()
+	if tab == nil {
+		return
+	}
+
+	fm := qt6.NewQFontMetrics(tab.editor.CurrentFont())
+	lineH := float64(fm.LineSpacing())
+	if lineH < 14 {
+		lineH = 20
+	}
+	h := math.Round(lineH * 6.0)
+	w := math.Round(h * 0.84)
+
+	cursor := tab.editor.TextCursor()
+	initialLetter := "A"
+	if sel := strings.TrimSpace(cursor.SelectedText()); sel != "" {
+		initialLetter = NormalizeDropCapLetter(sel)
+	}
+
+	defaultColor := "#1e293b"
+	opt, _ := FindTheme(mw.settings.Theme)
+	if IsValidHexColor(tab.pageSetup.TextColor) {
+		defaultColor = tab.pageSetup.TextColor
+	} else if opt.Foreground != "" {
+		defaultColor = opt.Foreground
+	} else if tab.editor.Palette().Text().Color().Lightness() > 140 {
+		defaultColor = "#f8fafc"
+	}
+
+	mw.nextDrawingSeq++
+	draft := DropCapItem{
+		ID:        fmt.Sprintf("dropcap-%d", mw.nextDrawingSeq),
+		Letter:    initialLetter,
+		Style:     DropCapSimpleBox,
+		TextColor: defaultColor,
+		Width:     w,
+		Height:    h,
+	}
+
+	item, _, ok := showDropCapDialog(mw.win.QWidget, draft, false)
+	if !ok {
+		return
+	}
+
+	mw.registerDropCapResource(tab, item)
+
+	frameFmt := qt6.NewQTextFrameFormat()
+	frameFmt.SetPosition(qt6.QTextFrameFormat__FloatLeft)
+	frameFmt.SetWidth(item.Width)
+	frameFmt.SetHeight(item.Height)
+	frameFmt.SetBorder(0)
+	frameFmt.SetPadding(0)
+	frameFmt.SetMargin(0)
+	frameFmt.SetRightMargin(6)
+	frameFmt.SetBottomMargin(4)
+
+	cursor.BeginEditBlock()
+	if cursor.HasSelection() {
+		cursor.RemoveSelectedText()
+	}
+	frame := cursor.InsertFrame(frameFmt)
+	imgCursor := frame.FirstCursorPosition()
+	imgFmt := qt6.NewQTextImageFormat()
+	imgFmt.SetName("dropcap://" + item.ID)
+	imgFmt.SetWidth(item.Width)
+	imgFmt.SetHeight(item.Height)
+	imgCursor.InsertImageWithFormat(imgFmt)
+	cursor.EndEditBlock()
+
+	tab.dropCaps = append(tab.dropCaps, item)
+	tab.editor.Document().SetModifiedWithBool(true)
+	tab.editor.SetFocus()
+}
+
+func (mw *MainWindow) findDropCapInFrame(tab *documentTab, cursor *qt6.QTextCursor) (int, *qt6.QTextFrame) {
+	if cursor == nil {
+		return -1, nil
+	}
+	checkName := func(c *qt6.QTextCursor) string {
+		if c.CharFormat().IsImageFormat() {
+			return c.CharFormat().ToImageFormat().Name()
+		}
+		return ""
+	}
+
+	name := checkName(cursor)
+	if !strings.HasPrefix(name, "dropcap://") {
+		probe := qt6.NewQTextCursor5(cursor)
+		if probe.MovePosition(qt6.QTextCursor__NextCharacter) {
+			name = checkName(probe)
+		}
+	}
+	if !strings.HasPrefix(name, "dropcap://") {
+		frame := cursor.CurrentFrame()
+		if frame != nil && frame.ParentFrame() != nil {
+			fc := frame.FirstCursorPosition()
+			if fc.MovePosition(qt6.QTextCursor__NextCharacter) {
+				name = checkName(fc)
+			}
+		}
+	}
+	if !strings.HasPrefix(name, "dropcap://") {
+		return -1, nil
+	}
+
+	id := strings.TrimPrefix(name, "dropcap://")
+	for i := range tab.dropCaps {
+		if tab.dropCaps[i].ID == id {
+			return i, cursor.CurrentFrame()
+		}
+	}
+	return -1, nil
+}
+
+func (mw *MainWindow) handleDropCapContextMenu(tab *documentTab, e *qt6.QContextMenuEvent) bool {
+	cursor := tab.editor.CursorForPosition(e.Pos())
+	idx, frame := mw.findDropCapInFrame(tab, cursor)
+	if idx < 0 {
+		return false
+	}
+
+	updated, deleted, ok := showDropCapDialog(mw.win.QWidget, tab.dropCaps[idx], true)
+	if !ok {
+		e.Accept()
+		return true
+	}
+
+	if deleted {
+		if frame != nil && frame.ParentFrame() != nil {
+			delCur := qt6.NewQTextCursor5(frame.FirstCursorPosition())
+			delCur.MovePosition(qt6.QTextCursor__PreviousCharacter)
+			endPos := frame.LastCursorPosition().Position() + 1
+			delCur.SetPosition2(endPos, qt6.QTextCursor__KeepAnchor)
+			delCur.RemoveSelectedText()
+		}
+		tab.dropCaps = append(tab.dropCaps[:idx], tab.dropCaps[idx+1:]...)
+	} else {
+		tab.dropCaps[idx] = updated
+		mw.registerDropCapResource(tab, updated)
+		tab.editor.Document().MarkContentsDirty(0, tab.editor.Document().CharacterCount())
+	}
+
+	tab.editor.Document().SetModifiedWithBool(true)
+	tab.editor.Viewport().Update()
 	e.Accept()
 	return true
 }

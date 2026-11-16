@@ -22,6 +22,7 @@ type documentTab struct {
 	filePath          string
 	pageSetup         PageSetup
 	drawings          []DrawingItem
+	dropCaps          []DropCapItem
 	selectedDrawingID string
 
 	dragMode   dragMode
@@ -330,6 +331,11 @@ func (mw *MainWindow) setupToolbars() {
 		})
 		drawMenu.AddAction(act)
 	}
+	drawMenu.AddSeparator()
+	dropCapAct := qt6.NewQAction5("Drop Cap...", drawMenu.QObject)
+	dropCapAct.OnTriggered(mw.insertDropCap)
+	drawMenu.AddAction(dropCapAct)
+
 	drawBtn.SetMenu(drawMenu)
 	formatTB.AddWidget(drawBtn.QWidget)
 
@@ -465,7 +471,7 @@ func (mw *MainWindow) findTabByPath(path string) (int, *documentTab) {
 	return -1, nil
 }
 
-func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit), pageSetup PageSetup, drawings []DrawingItem) *documentTab {
+func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit), pageSetup PageSetup, drawings []DrawingItem, dropCaps []DropCapItem) *documentTab {
 	ed := qt6.NewQTextEdit(mw.tabs.QWidget)
 	ed.SetAcceptRichText(true)
 	ed.SetFont(qt6.NewQFont6("Sans Serif", 12))
@@ -482,6 +488,7 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 		filePath:   CanonicalPath(filePath),
 		pageSetup:  pageSetup,
 		drawings:   drawings,
+		dropCaps:   dropCaps,
 		dragIndex:  -1,
 		spellTimer: spellTimer,
 	}
@@ -492,6 +499,9 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 	})
 
 	mw.applyThemeToTab(tab)
+	for _, dc := range dropCaps {
+		mw.registerDropCapResource(tab, dc)
+	}
 	if loadContent != nil {
 		loadContent(ed)
 	}
@@ -567,6 +577,9 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 	})
 	ed.OnContextMenuEvent(func(super func(e *qt6.QContextMenuEvent), e *qt6.QContextMenuEvent) {
 		if mw.handleDrawingContextMenu(tab, e) {
+			return
+		}
+		if mw.handleDropCapContextMenu(tab, e) {
 			return
 		}
 		if mw.showSpellContextMenu(tab, e) {
@@ -921,7 +934,7 @@ func (mw *MainWindow) applyEditorThemeAll() {
 }
 
 func (mw *MainWindow) newFile() {
-	mw.createTab("", nil, DefaultPageSetup(), nil)
+	mw.createTab("", nil, DefaultPageSetup(), nil, nil)
 }
 
 func (mw *MainWindow) openFile() {
@@ -944,6 +957,7 @@ func (mw *MainWindow) openFile() {
 
 	pageSetup := DefaultPageSetup()
 	var drawings []DrawingItem
+	var dropCaps []DropCapItem
 	format := DetectFormat(path)
 	var loader func(*qt6.QTextEdit)
 
@@ -955,11 +969,13 @@ func (mw *MainWindow) openFile() {
 	default:
 		pageSetup = ExtractHTMLPageSetup(content)
 		drawings = ExtractHTMLDrawings(content)
-		cleanHTML := StripHTMLDrawings(StripHTMLPageStyle(content))
+		stripped := StripHTMLDrawings(StripHTMLPageStyle(content))
+		var cleanHTML string
+		cleanHTML, dropCaps = PrepareHTMLDropCapsForEditor(stripped)
 		loader = func(ed *qt6.QTextEdit) { ed.SetHtml(cleanHTML) }
 	}
 
-	mw.createTab(path, loader, pageSetup, drawings)
+	mw.createTab(path, loader, pageSetup, drawings, dropCaps)
 }
 
 func (mw *MainWindow) saveCurrentTab() bool {
@@ -994,7 +1010,8 @@ func (mw *MainWindow) writeTabToPath(tab *documentTab, path string) bool {
 		content = tab.editor.ToPlainText()
 	default:
 		htmlWithSetup := InjectHTMLPageSetup(tab.editor.ToHtml(), tab.pageSetup)
-		content = InjectHTMLDrawings(htmlWithSetup, tab.drawings)
+		htmlWithDrawings := InjectHTMLDrawings(htmlWithSetup, tab.drawings)
+		content = InjectHTMLDropCaps(htmlWithDrawings, tab.dropCaps)
 	}
 
 	if err := WriteDocumentFile(path, content); err != nil {

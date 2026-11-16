@@ -283,3 +283,74 @@ func showNoteDialog(parent *qt6.QWidget, current DrawingItem) (DrawingItem, bool
 	updated.BehindText = layerCombo.CurrentIndex() == 1
 	return updated, false, true
 }
+
+func showDropCapDialog(parent *qt6.QWidget, current DropCapItem, allowDelete bool) (DropCapItem, bool, bool) {
+	dlg := qt6.NewQDialog(parent)
+	dlg.SetWindowTitle("Drop Cap")
+	dlg.SetModal(true)
+	dlg.SetMinimumWidth(320)
+
+	layout := qt6.NewQFormLayout(dlg.QWidget)
+
+	letterEdit := qt6.NewQLineEdit(dlg.QWidget)
+	letterEdit.SetMaxLength(1)
+	letterEdit.SetText(NormalizeDropCapLetter(current.Letter))
+	letterEdit.SetMaximumWidth(60)
+	layout.AddRow3("Letter:", letterEdit.QWidget)
+
+	styleCombo := qt6.NewQComboBox(dlg.QWidget)
+	styles := AvailableDropCapStyles()
+	selectedStyle := 0
+	for i, opt := range styles {
+		styleCombo.AddItem(opt.Label)
+		if opt.Style == current.Style {
+			selectedStyle = i
+		}
+	}
+	styleCombo.SetCurrentIndex(selectedStyle)
+	layout.AddRow3("Style:", styleCombo.QWidget)
+
+	textColor := current.TextColor
+	if !IsValidHexColor(textColor) {
+		textColor = "#1e293b"
+	}
+	colorBtn := qt6.NewQPushButton(dlg.QWidget)
+	updateColorButton(colorBtn, textColor)
+	colorBtn.OnClicked(func() {
+		chosen := qt6.QColorDialog_GetColor3(qt6.NewQColor6(textColor), dlg.QWidget, "Drop Cap Text Color")
+		if chosen.IsValid() {
+			textColor = chosen.Name()
+			updateColorButton(colorBtn, textColor)
+		}
+	})
+	layout.AddRow3("Text Color:", colorBtn.QWidget)
+
+	deleted := false
+	buttons := qt6.NewQDialogButtonBox4(qt6.QDialogButtonBox__Ok | qt6.QDialogButtonBox__Cancel)
+	if allowDelete {
+		delBtn := buttons.AddButton2("Delete Drop Cap", qt6.QDialogButtonBox__DestructiveRole)
+		delBtn.OnClicked(func() {
+			deleted = true
+			dlg.Accept()
+		})
+	}
+	buttons.OnAccepted(dlg.Accept)
+	buttons.OnRejected(dlg.Reject)
+	layout.AddRowWithWidget(buttons.QWidget)
+
+	if dlg.Exec() != int(qt6.QDialog__Accepted) {
+		return current, false, false
+	}
+	if deleted {
+		return current, true, true
+	}
+
+	updated := current
+	updated.Letter = NormalizeDropCapLetter(letterEdit.Text())
+	idx := styleCombo.CurrentIndex()
+	if idx >= 0 && idx < len(styles) {
+		updated.Style = styles[idx].Style
+	}
+	updated.TextColor = textColor
+	return updated, false, true
+}
