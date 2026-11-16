@@ -61,16 +61,39 @@ func FindTheme(mode ThemeMode) (ThemeOption, bool) {
 	return themeOptions[0], false
 }
 
+const (
+	DefaultZoomPercent = 100
+	MinZoomPercent     = 50
+	MaxZoomPercent     = 300
+	ZoomStepPercent    = 10
+)
+
+// ClampZoomPercent normalizes a persisted or requested zoom percentage into [MinZoomPercent, MaxZoomPercent],
+// defaulting non-positive values to DefaultZoomPercent.
+func ClampZoomPercent(z int) int {
+	if z <= 0 {
+		return DefaultZoomPercent
+	}
+	if z < MinZoomPercent {
+		return MinZoomPercent
+	}
+	if z > MaxZoomPercent {
+		return MaxZoomPercent
+	}
+	return z
+}
+
 // AppSettings holds persistent application preferences.
 type AppSettings struct {
 	Theme       ThemeMode `json:"theme"`
 	Spellcheck  bool      `json:"spellcheck"`
+	ZoomPercent int       `json:"zoomPercent,omitempty"`
 	RecentFonts []string  `json:"recentFonts,omitempty"`
 }
 
 // DefaultAppSettings returns the default settings (obey system theme, spellcheck enabled).
 func DefaultAppSettings() AppSettings {
-	return AppSettings{Theme: ThemeSystem, Spellcheck: true}
+	return AppSettings{Theme: ThemeSystem, Spellcheck: true, ZoomPercent: DefaultZoomPercent}
 }
 
 // DefaultSettingsPath returns the platform-appropriate settings file path
@@ -101,6 +124,7 @@ func LoadSettings(path string) (AppSettings, error) {
 	if _, ok := FindTheme(s.Theme); !ok {
 		s.Theme = ThemeSystem
 	}
+	s.ZoomPercent = ClampZoomPercent(s.ZoomPercent)
 	return s, nil
 }
 

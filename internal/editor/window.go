@@ -2,6 +2,7 @@ package editor
 
 import (
 	"fmt"
+	"math"
 	"unsafe"
 
 	"github.com/mappu/miqt/qt6"
@@ -31,16 +32,20 @@ type documentTab struct {
 	dragOrig   DrawingItem
 
 	spellTimer *qt6.QTimer
+	zoomDevice *qt6.QImage
 }
 
 // MainWindow wraps the primary Qt6 application window and tabbed rich-text editor.
 type MainWindow struct {
-	win         *qt6.QMainWindow
-	tabs        *qt6.QTabWidget
-	tabByWidget map[unsafe.Pointer]*documentTab
-	format      *formatControls
-	statsLabel  *qt6.QLabel
-	cursorLabel *qt6.QLabel
+	win          *qt6.QMainWindow
+	tabs         *qt6.QTabWidget
+	tabByWidget  map[unsafe.Pointer]*documentTab
+	format       *formatControls
+	statsLabel   *qt6.QLabel
+	cursorLabel  *qt6.QLabel
+	zoomOutBtn   *qt6.QToolButton
+	zoomLabelBtn *qt6.QToolButton
+	zoomInBtn    *qt6.QToolButton
 
 	undoAct *qt6.QAction
 	redoAct *qt6.QAction
@@ -121,7 +126,7 @@ func (mw *MainWindow) setupToolbars() {
 
 	// File actions
 	newAct := qt6.NewQAction6(
-		loadActionIcon(mw.win.QWidget, "+", "document-new"),
+		drawSVGIcon(mw.win.QWidget, iconNewDocumentSVG),
 		"New",
 		mw.win.QObject,
 	)
@@ -131,7 +136,7 @@ func (mw *MainWindow) setupToolbars() {
 	mainTB.AddAction(newAct)
 
 	openAct := qt6.NewQAction6(
-		loadActionIcon(mw.win.QWidget, "O", "document-open"),
+		drawSVGIcon(mw.win.QWidget, iconOpenFolderSVG),
 		"Open",
 		mw.win.QObject,
 	)
@@ -141,7 +146,7 @@ func (mw *MainWindow) setupToolbars() {
 	mainTB.AddAction(openAct)
 
 	saveAct := qt6.NewQAction6(
-		loadActionIcon(mw.win.QWidget, "S", "document-save"),
+		drawSVGIcon(mw.win.QWidget, iconSaveFloppySVG),
 		"Save",
 		mw.win.QObject,
 	)
@@ -151,7 +156,7 @@ func (mw *MainWindow) setupToolbars() {
 	mainTB.AddAction(saveAct)
 
 	saveAsAct := qt6.NewQAction6(
-		loadActionIcon(mw.win.QWidget, "S+", "document-save-as"),
+		drawSVGIcon(mw.win.QWidget, iconSaveAsFloppySVG),
 		"Save As",
 		mw.win.QObject,
 	)
@@ -343,6 +348,69 @@ func (mw *MainWindow) setupStatusBar() {
 	mw.cursorLabel = qt6.NewQLabel2()
 	sb.AddWidget(mw.statsLabel.QWidget)
 	sb.AddPermanentWidget(mw.cursorLabel.QWidget)
+
+	zoomContainer := qt6.NewQWidget(sb.QWidget)
+	zoomLayout := qt6.NewQHBoxLayout(zoomContainer)
+	zoomLayout.SetContentsMargins(6, 0, 2, 0)
+	zoomLayout.SetSpacing(2)
+
+	mw.zoomOutBtn = qt6.NewQToolButton(zoomContainer)
+	mw.zoomOutBtn.SetText("−")
+	mw.zoomOutBtn.SetToolTip("Zoom Out (Ctrl+-)")
+	mw.zoomOutBtn.SetAutoRaise(true)
+	mw.zoomOutBtn.OnClicked(func() {
+		mw.setZoomPercent(mw.settings.ZoomPercent - ZoomStepPercent)
+	})
+	zoomLayout.AddWidget(mw.zoomOutBtn.QWidget)
+
+	mw.zoomLabelBtn = qt6.NewQToolButton(zoomContainer)
+	mw.zoomLabelBtn.SetToolTip("Zoom Level (click for presets)")
+	mw.zoomLabelBtn.SetAutoRaise(true)
+	mw.zoomLabelBtn.SetPopupMode(qt6.QToolButton__InstantPopup)
+	zoomMenu := qt6.NewQMenu(mw.zoomLabelBtn.QWidget)
+	for _, pct := range []int{75, 90, 100, 110, 125, 150, 175, 200} {
+		z := pct
+		act := qt6.NewQAction5(fmt.Sprintf("%d%%", z), zoomMenu.QObject)
+		act.OnTriggered(func() {
+			mw.setZoomPercent(z)
+		})
+		zoomMenu.AddAction(act)
+	}
+	mw.zoomLabelBtn.SetMenu(zoomMenu)
+	zoomLayout.AddWidget(mw.zoomLabelBtn.QWidget)
+
+	mw.zoomInBtn = qt6.NewQToolButton(zoomContainer)
+	mw.zoomInBtn.SetText("+")
+	mw.zoomInBtn.SetToolTip("Zoom In (Ctrl+=)")
+	mw.zoomInBtn.SetAutoRaise(true)
+	mw.zoomInBtn.OnClicked(func() {
+		mw.setZoomPercent(mw.settings.ZoomPercent + ZoomStepPercent)
+	})
+	zoomLayout.AddWidget(mw.zoomInBtn.QWidget)
+
+	sb.AddPermanentWidget(zoomContainer)
+	mw.updateZoomControls()
+
+	zoomInAct := qt6.NewQAction5("Zoom In", mw.win.QObject)
+	zoomInAct.SetShortcut(qt6.QKeySequence_FromString("Ctrl+="))
+	zoomInAct.OnTriggered(func() {
+		mw.setZoomPercent(mw.settings.ZoomPercent + ZoomStepPercent)
+	})
+	mw.win.AddAction(zoomInAct)
+
+	zoomOutAct := qt6.NewQAction5("Zoom Out", mw.win.QObject)
+	zoomOutAct.SetShortcut(qt6.NewQKeySequence6(qt6.QKeySequence__ZoomOut))
+	zoomOutAct.OnTriggered(func() {
+		mw.setZoomPercent(mw.settings.ZoomPercent - ZoomStepPercent)
+	})
+	mw.win.AddAction(zoomOutAct)
+
+	zoomResetAct := qt6.NewQAction5("Reset Zoom", mw.win.QObject)
+	zoomResetAct.SetShortcut(qt6.QKeySequence_FromString("Ctrl+0"))
+	zoomResetAct.OnTriggered(func() {
+		mw.setZoomPercent(DefaultZoomPercent)
+	})
+	mw.win.AddAction(zoomResetAct)
 }
 
 func (mw *MainWindow) connectWindowSignals() {
@@ -427,6 +495,7 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 	if loadContent != nil {
 		loadContent(ed)
 	}
+	mw.applyZoomToTab(tab)
 	mw.applyMarginsToTab(tab)
 	ed.Document().SetModifiedWithBool(false)
 	mw.runSpellCheckTab(tab)
@@ -515,6 +584,21 @@ func (mw *MainWindow) createTab(filePath string, loadContent func(*qt6.QTextEdit
 		super(e)
 		mw.applyMarginsToTab(tab)
 	})
+	ed.OnShowEvent(func(super func(e *qt6.QShowEvent), e *qt6.QShowEvent) {
+		super(e)
+		mw.applyMarginsToTab(tab)
+		// On macOS, the viewport geometry can finalize right after showEvent;
+		// re-apply on the next event-loop tick so text width and margins match.
+		t := qt6.NewQTimer2(ed.QObject)
+		t.SetSingleShot(true)
+		t.OnTimeout(func() {
+			mw.applyMarginsToTab(tab)
+			if mw.currentTab() == tab {
+				ed.SetFocus()
+			}
+		})
+		t.Start(0)
+	})
 
 	idx := mw.tabs.AddTab(ed.QWidget, DisplayName(tab.filePath))
 	if tab.filePath != "" {
@@ -549,6 +633,7 @@ func (mw *MainWindow) onActiveTabChanged(index int) {
 	mw.cutAct.SetEnabled(hasSel)
 	mw.copyAct.SetEnabled(hasSel)
 
+	mw.applyMarginsToTab(tab)
 	mw.updateWindowTitle()
 	mw.updateStatusBar()
 	tab.editor.SetFocus()
@@ -658,6 +743,7 @@ func (mw *MainWindow) openSettings() {
 		return
 	}
 	updated.RecentFonts = mw.settings.RecentFonts
+	updated.ZoomPercent = mw.settings.ZoomPercent
 	mw.settings = updated
 	mw.applyEditorThemeAll()
 	mw.runSpellCheckAll()
@@ -686,6 +772,12 @@ func (mw *MainWindow) applyMarginsToTab(tab *documentTab) {
 	doc := tab.editor.Document()
 	wasModified := doc.IsModified()
 
+	if vpWidth := tab.editor.Viewport().Width(); vpWidth > 0 {
+		if doc.PageSize().Width() != float64(vpWidth) {
+			doc.SetPageSize(qt6.NewQSizeF3(float64(vpWidth), -1))
+		}
+	}
+
 	left, right := mw.effectiveHorizontalMargins(tab)
 	root := doc.RootFrame()
 	frameFmt := root.FrameFormat()
@@ -694,11 +786,78 @@ func (mw *MainWindow) applyMarginsToTab(tab *documentTab) {
 	frameFmt.SetBottomMargin(InchesToPx(tab.pageSetup.Margins.Bottom))
 	frameFmt.SetLeftMargin(left)
 	root.SetFrameFormat(frameFmt)
+	doc.MarkContentsDirty(0, doc.CharacterCount())
 
 	if !wasModified {
 		doc.SetModifiedWithBool(false)
 	}
 	tab.editor.Viewport().Update()
+}
+
+func (mw *MainWindow) setZoomPercent(percent int) {
+	clamped := ClampZoomPercent(percent)
+	if clamped == mw.settings.ZoomPercent {
+		mw.updateZoomControls()
+		return
+	}
+	mw.settings.ZoomPercent = clamped
+	mw.updateZoomControls()
+	mw.applyZoomAll()
+	if mw.settingsPath != "" {
+		_ = SaveSettings(mw.settingsPath, mw.settings)
+	}
+}
+
+func (mw *MainWindow) updateZoomControls() {
+	z := ClampZoomPercent(mw.settings.ZoomPercent)
+	if mw.zoomLabelBtn != nil {
+		mw.zoomLabelBtn.SetText(fmt.Sprintf("%d%%", z))
+	}
+	if mw.zoomOutBtn != nil {
+		mw.zoomOutBtn.SetEnabled(z > MinZoomPercent)
+	}
+	if mw.zoomInBtn != nil {
+		mw.zoomInBtn.SetEnabled(z < MaxZoomPercent)
+	}
+}
+
+func (mw *MainWindow) applyZoomAll() {
+	for i := 0; i < mw.tabs.Count(); i++ {
+		if tab := mw.tabAt(i); tab != nil {
+			mw.applyZoomToTab(tab)
+		}
+	}
+}
+
+func (mw *MainWindow) applyZoomToTab(tab *documentTab) {
+	ed := tab.editor
+	doc := ed.Document()
+	wasModified := doc.IsModified()
+
+	zoom := ClampZoomPercent(mw.settings.ZoomPercent)
+	if zoom == DefaultZoomPercent {
+		tab.zoomDevice = nil
+		doc.DocumentLayout().SetPaintDevice(ed.QPaintDevice)
+	} else {
+		baseDPI := ed.LogicalDpiY()
+		if baseDPI <= 0 {
+			baseDPI = 96
+		}
+		targetDPI := float64(baseDPI) * float64(zoom) / 100.0
+		dpm := int(math.Round(targetDPI / 0.0254))
+		img := qt6.NewQImage3(1, 1, qt6.QImage__Format_ARGB32)
+		img.SetDotsPerMeterX(dpm)
+		img.SetDotsPerMeterY(dpm)
+		tab.zoomDevice = img
+		doc.DocumentLayout().SetPaintDevice(img.QPaintDevice)
+	}
+
+	doc.MarkContentsDirty(0, doc.CharacterCount())
+	mw.applyMarginsToTab(tab)
+	if !wasModified {
+		doc.SetModifiedWithBool(false)
+	}
+	ed.Viewport().Update()
 }
 
 func (mw *MainWindow) paintMarginGuides(tab *documentTab) {
@@ -709,10 +868,11 @@ func (mw *MainWindow) paintMarginGuides(tab *documentTab) {
 		return
 	}
 
+	zoomScale := float64(ClampZoomPercent(mw.settings.ZoomPercent)) / 100.0
 	leftMargin, rightMargin := mw.effectiveHorizontalMargins(tab)
 	scrollX := tab.editor.HorizontalScrollBar().Value()
-	leftX := int(leftMargin) - scrollX
-	rightX := w - int(rightMargin) - scrollX
+	leftX := int(math.Round(leftMargin*zoomScale)) - scrollX
+	rightX := w - int(math.Round(rightMargin*zoomScale)) - scrollX
 
 	painter := qt6.NewQPainter2(vp.QPaintDevice)
 	defer painter.End()
